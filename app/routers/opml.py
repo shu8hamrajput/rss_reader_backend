@@ -1,0 +1,171 @@
+"""
+OPML import and export.
+
+Import: POST /opml/import   (multipart file upload or raw XML body)
+Export: GET  /opml/export   (returns application/xml)
+"""
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from sqlalchemy.orm import Session
+
+from ..auth import get_current_user
+from ..database import get_db
+from ..models import Category, Feed, User
+from ..schemas import OPMLImportResult
+from ..services.feed_parser import refresh_feed
+
+router = APIRouter(prefix="/opml", tags=["OPML"])
+
+
+# ── Import ────────────────────────────────────────────────────────────────────
+
+def _iter_outlines(element: ET.Element, folder: str | None = None):
+    """Yield (xml_url, title, folder) tuples from nested OPML outlines."""
+    for outline in element.findall("outline"):
+        xml_url = outline.get("xmlUrl") or outline.get("xmlurl")
+        title = outline.get("title") or outline.get("text")
+        feed_type = (outline.get("type") or "").lower()
+
+        if xml_url and feed_type in ("rss", "atom", ""):
+            yield xml_url.strip(), title, folder
+        else:
+            # Treat as a folder — recurse
+            folder_name = title or outline.get("text")
+            yield from _iter_outlines(outline, folder_name)
+
+
+@router.post(
+    "/import",
+    response_model=OPMLImportResult,
+    summary="Import feeds from an OPML file",
+    description=(
+        "Upload an OPML file to bulk-subscribe to feeds. "
+        "Folders in the OPML become categories. "
+        "Already-subscribed feeds are skipped."
+    ),
+)
+async def import_opml(
+    file: Annotated[UploadFile, File(description="OPML file (.opml or .xml)")],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    raw = await file.read()
+    try:
+        root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid XML: {exc}")
+
+    body = root.find("body")
+    if body is None:
+        raise HTTPException(status_code=422, detail="OPML has no <body> element")
+
+    added = skipped = failed = 0
+    errors: list[str] = []
+    category_cache: dict[str, Category] = {}
+
+    for xml_url, title, folder_name in _iter_outlines(body):
+        # Resolve or create category
+        cat: Category | None = None
+        if folder_name:
+            if folder_name not in category_cache:
+                cat = db.query(Category).filter(
+                    Category.user_id == current_user.id, Category.name == folder_name
+                ).first()
+                if not cat:
+                    cat = Category(user_id=current_user.id, name=folder_name)
+                    db.add(cat)
+                    db.flush()
+                category_cache[folder_name] = cat
+            cat = category_cache[folder_name]
+
+        # Check for existing subscription
+        existing = db.query(Feed).filter(
+            Feed.url == xml_url, Feed.user_id == current_user.id
+        ).first()
+        if existing:
+            skipped += 1
+            continue
+
+        feed = Feed(url=xml_url, title=title, user_id=current_user.id)
+        if cat:
+            feed.categories.append(cat)
+        db.add(feed)
+        db.flush()
+
+        try:
+            await refresh_feed(feed, db)
+            added += 1
+        except Exception as exc:
+            errors.append(f"{xml_url}: {exc}")
+            failed += 1
+
+    db.commit()
+    return OPMLImportResult(added=added, skipped=skipped, failed=failed, errors=errors)
+
+
+# ── Export ────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/export",
+    summary="Export your feeds as an OPML file",
+    description="Downloads all your subscribed feeds as a standard OPML 1.0 file, grouped by category.",
+    response_class=Response,
+)
+def export_opml(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    feeds = db.query(Feed).filter(Feed.user_id == current_user.id).all()
+    categories = db.query(Category).filter(Category.user_id == current_user.id).all()
+
+    root = ET.Element("opml", version="1.0")
+    head = ET.SubElement(root, "head")
+    ET.SubElement(head, "title").text = f"{current_user.name or current_user.email}'s feeds"
+    ET.SubElement(head, "dateCreated").text = datetime.now(timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S +0000"
+    )
+    body = ET.SubElement(root, "body")
+
+    # Categorised feeds
+    categorised_feed_ids: set[int] = set()
+    for cat in categories:
+        if not cat.feeds:
+            continue
+        folder = ET.SubElement(body, "outline", text=cat.name, title=cat.name)
+        for feed in cat.feeds:
+            ET.SubElement(
+                folder,
+                "outline",
+                type="rss",
+                text=feed.title or feed.url,
+                title=feed.title or feed.url,
+                xmlUrl=feed.url,
+                **{"htmlUrl": feed.site_url} if feed.site_url else {},
+            )
+            categorised_feed_ids.add(feed.id)
+
+    # Uncategorised feeds
+    for feed in feeds:
+        if feed.id in categorised_feed_ids:
+            continue
+        ET.SubElement(
+            body,
+            "outline",
+            type="rss",
+            text=feed.title or feed.url,
+            title=feed.title or feed.url,
+            xmlUrl=feed.url,
+            **{"htmlUrl": feed.site_url} if feed.site_url else {},
+        )
+
+    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
+    xml_bytes = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+
+    return Response(
+        content=xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": "attachment; filename=feeds.opml"},
+    )
