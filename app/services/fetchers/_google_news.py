@@ -1,42 +1,27 @@
 """
 Google News fetcher.
 
-Google News RSS article URLs (news.google.com/rss/articles/...) are redirect
-wrappers around the real article. This fetcher resolves the redirect chain and
-scrapes the final destination page. If the redirect still lands on google.com
-(e.g. AMP viewer), it falls back to the canonical <link> tag in the page.
+Google News RSS article URLs (news.google.com/rss/articles/...) are opaque
+tokens — no HTTP redirect leads to the real article. This fetcher uses the
+`googlenewsdecoder` package to resolve the token to the canonical article URL,
+then delegates to the default scraper to extract content from that URL.
 """
-import httpx
-from urllib.parse import urlparse
+import asyncio
 
-from ._default import _HEADERS, extract_content
+from ._default import fetch as default_fetch
 
 
 async def fetch(url: str) -> str | None:
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
-            resp = await client.get(url, headers=_HEADERS)
-            resp.raise_for_status()
+        from googlenewsdecoder import new_decoderv1
 
-        final_url = str(resp.url)
+        # new_decoderv1 is synchronous and makes HTTP calls; run off the event loop
+        result = await asyncio.to_thread(new_decoderv1, url)
 
-        # Happy path: redirect landed us on the real article
-        if "google.com" not in urlparse(final_url).netloc:
-            return extract_content(resp.text)
+        if not result.get("status"):
+            return None
 
-        # Still on Google (AMP viewer, consent page, etc.) — look for canonical
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        canonical_tag = soup.find("link", rel="canonical")
-        canonical_url = canonical_tag.get("href") if canonical_tag else None
-
-        if canonical_url and "google.com" not in urlparse(canonical_url).netloc:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
-                resp2 = await client.get(canonical_url, headers=_HEADERS)
-                resp2.raise_for_status()
-            return extract_content(resp2.text)
-
-        return None
+        real_url = result["decoded_url"]
+        return await default_fetch(real_url)
     except Exception:
         return None

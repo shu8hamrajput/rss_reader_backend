@@ -13,3 +13,4 @@ python-dotenv>=1.0.0
 apscheduler>=3.10.0
 sse-starlette>=2.1.0
 slowapi>=0.1.9
+googlenewsdecoder>=0.1.7
