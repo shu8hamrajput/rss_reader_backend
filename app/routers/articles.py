@@ -14,6 +14,7 @@ from ..schemas import (
     ArticleReadUpdate,
     ArticleResponse,
     BulkActionResponse,
+    BulkBookmarkRequest,
     BulkMarkReadRequest,
     BulkSaveLaterResponse,
     BulkTagRequest,
@@ -216,6 +217,23 @@ def bulk_read_later(
             _add_tag(article, "read_later")
         else:
             _remove_tag(article, "read_later")
+    db.commit()
+    return BulkActionResponse(updated=len(articles))
+
+
+@router.post(
+    "/bulk/bookmark",
+    response_model=BulkActionResponse,
+    summary="Bookmark or unbookmark a set of articles",
+)
+def bulk_bookmark(
+    payload: BulkBookmarkRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    articles = _owned_articles(payload.article_ids, current_user, db)
+    for article in articles:
+        article.is_bookmarked = payload.is_bookmarked
     db.commit()
     return BulkActionResponse(updated=len(articles))
 

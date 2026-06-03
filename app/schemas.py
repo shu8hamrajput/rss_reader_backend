@@ -172,6 +172,11 @@ class BulkMarkReadRequest(BaseModel):
     is_read: bool
 
 
+class BulkBookmarkRequest(BaseModel):
+    article_ids: list[int]
+    is_bookmarked: bool
+
+
 class BulkActionResponse(BaseModel):
     updated: int
 

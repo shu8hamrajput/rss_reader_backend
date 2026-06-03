@@ -134,14 +134,14 @@ async def google_login(response: Response):
 
 @router.get(
     "/google/callback",
-    response_model=TokenResponse,
+    response_class=RedirectResponse,
     summary="Google OAuth2 callback (web flow)",
     description=(
         "Google redirects here after user consent. "
         "Verifies state, exchanges the code, creates/updates the user, "
-        "and returns a JWT. For a SPA you can redirect to the frontend with "
-        "`?token=<jwt>` instead."
+        "and redirects the browser back to the frontend with `?token=<jwt>`."
     ),
+    status_code=302,
 )
 async def google_callback(
     code: str = Query(...),
@@ -156,7 +156,14 @@ async def google_callback(
 
     google_info = await _exchange_code(code, settings.google_redirect_uri)
     user = _upsert_user(google_info, db)
-    return _build_token_response(user)
+    token_response = _build_token_response(user)
+
+    separator = '&' if '?' in settings.frontend_url else '?'
+    redirect_url = f"{settings.frontend_url}{separator}{urlencode({'token': token_response.access_token})}"
+
+    redirect = RedirectResponse(url=redirect_url, status_code=302)
+    redirect.delete_cookie('oauth_state')
+    return redirect
 
 
 # ── Mobile / SPA token exchange ───────────────────────────────────────────────
