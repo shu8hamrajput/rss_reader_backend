@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import text
 
 from .database import Base, engine
-from .routers import articles, auth, categories, feeds, opml, search, stream
+from .routers import articles, auth, categories, feeds, highlights, opml, search, stream
 from .services import scheduler as sched
 
 # ── Rate limiter (IP-based; swap key_func for user-based if needed) ───────────
@@ -112,6 +112,7 @@ app.add_middleware(
 app.include_router(auth.router,       prefix="/api/v1")
 app.include_router(feeds.router,      prefix="/api/v1")
 app.include_router(articles.router,   prefix="/api/v1")
+app.include_router(highlights.router, prefix="/api/v1")
 app.include_router(categories.router, prefix="/api/v1")
 app.include_router(opml.router,       prefix="/api/v1")
 app.include_router(stream.router,     prefix="/api/v1")

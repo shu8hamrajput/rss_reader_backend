@@ -186,6 +186,50 @@ class BulkSaveLaterResponse(BaseModel):
     fetched: int
 
 
+# ── Highlight schemas ─────────────────────────────────────────────────────────
+
+class HighlightCreate(BaseModel):
+    start_pos: int
+    end_pos: int
+    color_id: int = 1
+
+    @field_validator("end_pos")
+    @classmethod
+    def end_after_start(cls, v: int, info) -> int:
+        if v <= info.data.get("start_pos", 0):
+            raise ValueError("end_pos must be greater than start_pos")
+        return v
+
+    @field_validator("color_id")
+    @classmethod
+    def valid_color(cls, v: int) -> int:
+        if v not in (1, 2, 3, 4):
+            raise ValueError("color_id must be 1, 2, 3, or 4")
+        return v
+
+
+class HighlightUpdate(BaseModel):
+    color_id: int
+
+    @field_validator("color_id")
+    @classmethod
+    def valid_color(cls, v: int) -> int:
+        if v not in (1, 2, 3, 4):
+            raise ValueError("color_id must be 1, 2, 3, or 4")
+        return v
+
+
+class HighlightResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    article_id: int
+    start_pos: int
+    end_pos: int
+    color_id: int
+    created_at: datetime
+
+
 # ── Search schemas ───────────────────────────────────────────────────────────
 
 class FeedSearchResult(BaseModel):

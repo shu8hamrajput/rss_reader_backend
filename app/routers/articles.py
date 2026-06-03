@@ -116,6 +116,23 @@ def get_article(
     return ArticleResponse.model_validate(_owned_article(article_id, current_user, db))
 
 
+@router.post("/{article_id}/refetch", response_model=ArticleResponse, summary="Re-fetch and store full article content")
+async def refetch_article_content(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    article = _owned_article(article_id, current_user, db)
+    if not article.url:
+        raise HTTPException(status_code=422, detail="Article has no URL to fetch from")
+    html = await fetch_full_content(article.url)
+    if html:
+        article.full_content = html
+        db.commit()
+        db.refresh(article)
+    return ArticleResponse.model_validate(article)
+
+
 @router.patch("/{article_id}/read", response_model=ArticleResponse, summary="Mark read / unread")
 def update_read_status(
     article_id: int,

@@ -107,3 +107,22 @@ class Article(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     feed: Mapped["Feed"] = relationship("Feed", back_populates="articles")
+    highlights: Mapped[list["Highlight"]] = relationship(
+        "Highlight", back_populates="article", cascade="all, delete-orphan"
+    )
+
+
+# ── Highlights ────────────────────────────────────────────────────────────────
+
+class Highlight(Base):
+    __tablename__ = "highlights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    start_pos: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_pos: Mapped[int] = mapped_column(Integer, nullable=False)
+    color_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    article: Mapped["Article"] = relationship("Article", back_populates="highlights")
