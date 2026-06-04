@@ -35,6 +35,7 @@ async def fetch_content(url: str) -> str | None:
 
 # ── Built-in registrations ────────────────────────────────────────────────────
 
-from . import _google_news  # noqa: E402
+from . import _google_news, the_hindu_opinion  # noqa: E402
 
 register(r"news\.google\.com", _google_news.fetch)
+register(r"thehindu\.com/opinion/", the_hindu_opinion.fetch)
