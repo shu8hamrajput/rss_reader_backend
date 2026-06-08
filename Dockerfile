@@ -8,10 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# /data is where the persistent Fly volume is mounted
-RUN mkdir -p /data
-
 EXPOSE 8080
 
-# Single worker — SQLite can't handle concurrent writes across multiple processes
+# Default command runs the API; override in docker-compose / Fly processes to
+# run a Celery worker (`celery -A app.celery_app worker -l info`) or beat
+# (`celery -A app.celery_app beat -l info`) from the same image.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

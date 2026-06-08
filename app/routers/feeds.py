@@ -14,6 +14,7 @@ from ..schemas import (
     RefreshResult,
 )
 from ..services.feed_parser import refresh_feed
+from ..services.plans import effective_plan, limits_for
 
 router = APIRouter(prefix="/feeds", tags=["Feeds"])
 
@@ -59,6 +60,15 @@ async def create_feed(
 ):
     if db.query(Feed).filter(Feed.url == payload.url, Feed.user_id == current_user.id).first():
         raise HTTPException(status_code=409, detail="You are already subscribed to this feed")
+
+    max_feeds = limits_for(effective_plan(current_user)).max_feeds
+    if max_feeds is not None:
+        feed_count = db.query(func.count(Feed.id)).filter(Feed.user_id == current_user.id).scalar() or 0
+        if feed_count >= max_feeds:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Your plan allows up to {max_feeds} feeds. Upgrade to subscribe to more.",
+            )
 
     feed = Feed(url=payload.url, title=payload.title, user_id=current_user.id)
     db.add(feed)

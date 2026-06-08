@@ -1,8 +1,9 @@
 import asyncio
 import json
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -18,8 +19,12 @@ from ..schemas import (
     BulkMarkReadRequest,
     BulkSaveLaterResponse,
     BulkTagRequest,
+    DailyReadCount,
+    ReadingStatsResponse,
+    TopFeedStat,
 )
 from ..services.article_fetcher import fetch_full_content
+from ..services.usage import record_fetches, remaining_fetch_quota
 
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
@@ -37,16 +42,21 @@ def _owned_article(article_id: int, user: User, db: Session) -> Article:
 
 
 def _fts_ids(search: str, db: Session) -> list[int] | None:
-    """Return article IDs matching the FTS5 query, or None if FTS is unavailable."""
+    """Return article IDs matching the Postgres full-text query, ranked by relevance,
+    or None if the search_vector index is unavailable (fall back to ILIKE)."""
     try:
-        safe = search.replace('"', '""')
         rows = db.execute(
-            text('SELECT rowid FROM articles_fts WHERE articles_fts MATCH :q ORDER BY rank'),
-            {"q": f'"{safe}"'},
+            text(
+                """SELECT id FROM articles
+                   WHERE search_vector @@ plainto_tsquery('english', :q)
+                   ORDER BY ts_rank(search_vector, plainto_tsquery('english', :q)) DESC"""
+            ),
+            {"q": search},
         ).fetchall()
         return [r[0] for r in rows]
     except Exception:
-        return None  # FTS table not yet created — fall back to ILIKE
+        db.rollback()  # Postgres aborts the transaction on error — must roll back before reuse
+        return None  # search_vector not yet populated — fall back to ILIKE
 
 
 @router.get("", response_model=ArticleListResponse, summary="List articles with filtering and pagination")
@@ -80,7 +90,7 @@ def list_articles(
         q = q.filter(Article.is_bookmarked == is_bookmarked)
 
     if tag is not None:
-        # JSON array contains the tag — SQLite JSON_EACH approach via LIKE for portability
+        # JSON array contains the tag — simple LIKE match keeps this portable across SQLite/Postgres
         q = q.filter(Article.tags.like(f'%"{tag}"%'))
 
     if search:
@@ -107,6 +117,89 @@ def list_articles(
     )
 
 
+@router.get("/stats", response_model=ReadingStatsResponse, summary="Reading activity statistics")
+def get_reading_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    base = db.query(Article).join(Feed).filter(Feed.user_id == current_user.id)
+
+    total_articles = base.count()
+    total_read = base.filter(Article.is_read == True).count()
+    total_bookmarked = base.filter(Article.is_bookmarked == True).count()
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    week_start = today_start - timedelta(days=6)
+
+    read_today = base.filter(Article.read_at >= today_start).count()
+    read_this_week = base.filter(Article.read_at >= week_start).count()
+
+    # Daily read counts for the last 30 days
+    window_start = today_start - timedelta(days=29)
+    daily_rows = (
+        base.filter(Article.read_at >= window_start)
+        .with_entities(func.date(Article.read_at).label("d"), func.count(Article.id))
+        .group_by("d")
+        .all()
+    )
+    counts_by_date = {row[0].isoformat(): row[1] for row in daily_rows}
+    daily_counts = [
+        DailyReadCount(date=d.isoformat(), count=counts_by_date.get(d.isoformat(), 0))
+        for d in (window_start.date() + timedelta(days=i) for i in range(30))
+    ]
+
+    # Streaks: derived from the distinct set of days with at least one read article
+    read_dates = sorted(
+        {row[0] for row in base.filter(Article.read_at.isnot(None))
+            .with_entities(func.date(Article.read_at)).distinct().all()}
+    )
+    current_streak = 0
+    longest_streak = 0
+    if read_dates:
+        run = 1
+        longest_streak = 1
+        for prev, curr in zip(read_dates, read_dates[1:]):
+            if curr - prev == timedelta(days=1):
+                run += 1
+            else:
+                run = 1
+            longest_streak = max(longest_streak, run)
+
+        last_date = read_dates[-1]
+        if last_date in (today, today - timedelta(days=1)):
+            current_streak = 1
+            for i in range(len(read_dates) - 1, 0, -1):
+                if read_dates[i] - read_dates[i - 1] == timedelta(days=1):
+                    current_streak += 1
+                else:
+                    break
+
+    top_feed_rows = (
+        base.filter(Article.is_read == True)
+        .with_entities(Feed.id, Feed.title, func.count(Article.id).label("c"))
+        .group_by(Feed.id, Feed.title)
+        .order_by(func.count(Article.id).desc())
+        .limit(5)
+        .all()
+    )
+    top_feeds = [TopFeedStat(feed_id=row[0], title=row[1], read_count=row[2]) for row in top_feed_rows]
+
+    return ReadingStatsResponse(
+        total_articles=total_articles,
+        total_read=total_read,
+        total_unread=total_articles - total_read,
+        total_bookmarked=total_bookmarked,
+        read_today=read_today,
+        read_this_week=read_this_week,
+        current_streak=current_streak,
+        longest_streak=longest_streak,
+        daily_counts=daily_counts,
+        top_feeds=top_feeds,
+    )
+
+
 @router.get("/{article_id}", response_model=ArticleResponse, summary="Get a single article")
 def get_article(
     article_id: int,
@@ -125,7 +218,16 @@ async def refetch_article_content(
     article = _owned_article(article_id, current_user, db)
     if not article.url:
         raise HTTPException(status_code=422, detail="Article has no URL to fetch from")
+
+    remaining = remaining_fetch_quota(current_user)
+    if remaining is not None and remaining <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily full-content fetch limit reached for your plan. Try again tomorrow or upgrade.",
+        )
+
     html = await fetch_full_content(article.url)
+    record_fetches(current_user, 1)
     if html:
         article.full_content = html
         db.commit()
@@ -142,6 +244,7 @@ def update_read_status(
 ):
     article = _owned_article(article_id, current_user, db)
     article.is_read = payload.is_read
+    article.read_at = datetime.now(timezone.utc) if payload.is_read else None
     db.commit()
     db.refresh(article)
     return ArticleResponse.model_validate(article)
@@ -176,7 +279,7 @@ def mark_all_read(
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
     db.query(Article).filter(Article.feed_id == feed_id, Article.is_read == False).update(
-        {"is_read": True}
+        {"is_read": True, "read_at": datetime.now(timezone.utc)}
     )
     db.commit()
 
@@ -270,8 +373,14 @@ async def bulk_save_later(
 
     if payload.value:
         urls = [a.url for a in articles if a.url and not a.full_content]
+
+        remaining = remaining_fetch_quota(current_user)
+        if remaining is not None:
+            urls = urls[:remaining]  # plan ran out — fetch as many as the quota allows
+
         if urls:
             results = await asyncio.gather(*[fetch_full_content(u) for u in urls])
+            record_fetches(current_user, len(urls))
             url_to_content = {url: content for url, content in zip(urls, results)}
             for article in articles:
                 if article.url and article.url in url_to_content:
@@ -302,6 +411,7 @@ def bulk_mark_read(
     articles = _owned_articles(payload.article_ids, current_user, db)
     for article in articles:
         article.is_read = payload.is_read
+        article.read_at = datetime.now(timezone.utc) if payload.is_read else None
         if payload.is_read:
             _add_tag(article, "read")
             _remove_tag(article, "unread")

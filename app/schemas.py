@@ -12,6 +12,7 @@ class UserResponse(BaseModel):
     email: str
     name: str | None
     avatar_url: str | None
+    plan: str
     created_at: datetime
     last_login_at: datetime
 
@@ -275,3 +276,126 @@ class RefreshResult(BaseModel):
     feed_id: int
     new_articles: int
     message: str
+
+
+# ── Payments (Razorpay) ───────────────────────────────────────────────────────
+
+class PaymentOrderCreate(BaseModel):
+    plan: str  # purchasable plan id, e.g. "paid"
+
+
+class PaymentOrderResponse(BaseModel):
+    order_id: str
+    amount: int   # smallest currency unit (paise for INR) — pass straight to Checkout.js
+    currency: str
+    key_id: str   # Razorpay key ID — public, safe to expose to the client
+    plan: str
+
+
+class PaymentVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+# ── Reading stats ─────────────────────────────────────────────────────────────
+
+class DailyReadCount(BaseModel):
+    date: str
+    count: int
+
+
+class TopFeedStat(BaseModel):
+    feed_id: int
+    title: str | None
+    read_count: int
+
+
+class ReadingStatsResponse(BaseModel):
+    total_articles: int
+    total_read: int
+    total_unread: int
+    total_bookmarked: int
+    read_today: int
+    read_this_week: int
+    current_streak: int
+    longest_streak: int
+    daily_counts: list[DailyReadCount]
+    top_feeds: list[TopFeedStat]
+
+
+# ── Collections (curated, shareable feed lists) ──────────────────────────────
+
+class CollectionItemCreate(BaseModel):
+    feed_url: str
+    title: str | None = None
+    icon_url: str | None = None
+
+    @field_validator("feed_url")
+    @classmethod
+    def validate_feed_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("feed_url is required")
+        return v
+
+
+class CollectionItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    feed_url: str
+    title: str | None
+    icon_url: str | None
+    position: int
+
+
+class CollectionCreate(BaseModel):
+    name: str
+    description: str | None = None
+    is_public: bool = False
+    items: list[CollectionItemCreate] = []
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name is required")
+        return v
+
+
+class CollectionUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    is_public: bool | None = None
+
+
+class CollectionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    owner_id: int
+    owner_name: str | None = None
+    name: str
+    slug: str
+    description: str | None
+    is_public: bool
+    subscriber_count: int
+    is_subscribed: bool = False
+    is_owner: bool = False
+    items: list[CollectionItemResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class CollectionListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[CollectionResponse]
+
+
+class CollectionSubscribeResult(BaseModel):
+    subscribed: bool
+    feeds_added: int

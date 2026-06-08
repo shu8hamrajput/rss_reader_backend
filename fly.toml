@@ -9,12 +9,10 @@ primary_region = 'bom'
 [build]
 
 [env]
-  DATABASE_URL = 'sqlite:////data/rss_reader.db'
   PORT = '8080'
-
-[[mounts]]
-  source = 'rss_reader_data'
-  destination = '/data'
+  # DATABASE_URL, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND are set as
+  # secrets (see .env.example) — point them at managed Postgres/Redis/RabbitMQ,
+  # e.g. `fly postgres create`, Upstash Redis, CloudAMQP.
 
 [http_service]
   internal_port = 8080

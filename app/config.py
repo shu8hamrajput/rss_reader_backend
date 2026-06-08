@@ -16,8 +16,20 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24  # 24 hours
 
-    # Database — override with postgres:// URL in production
-    database_url: str = "sqlite:///./rss_reader.db"
+    # Database — PostgreSQL (psycopg3 driver)
+    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/rss_reader"
+
+    # Redis — caching, rate limiting, SSE pub/sub, and Celery result backend
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Celery — RabbitMQ broker, Redis result backend
+    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_result_backend: str = "redis://localhost:6379/1"
+
+    # Razorpay — checkout for plan upgrades; create keys at https://dashboard.razorpay.com/app/keys
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
 
     # App
     frontend_url: str = "http://localhost:3000"

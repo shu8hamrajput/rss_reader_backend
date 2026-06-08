@@ -2,7 +2,7 @@
 Server-Sent Events endpoint.
 
 Clients connect once and receive a live stream of new-article notifications
-as the background scheduler refreshes feeds.
+as the periodic Celery refresh task processes feeds.
 
 Event format (JSON):
   {"type": "new_articles", "feed_id": 42, "count": 7}

@@ -8,60 +8,51 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy import text
 
+from .config import settings
 from .database import Base, engine
-from .routers import articles, auth, categories, feeds, highlights, opml, search, stream
-from .services import scheduler as sched
+from .routers import articles, auth, categories, collections, feeds, highlights, opml, payments, search, stream
 
-# ── Rate limiter (IP-based; swap key_func for user-based if needed) ───────────
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200/minute"],
+    storage_uri=settings.redis_url,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     _migrate()
-    sched.start()
     yield
-    sched.stop()
 
 
 def _migrate() -> None:
-    """Additive schema migrations for databases created before this version."""
+    """Additive schema setup beyond what create_all handles (indexes, triggers)."""
     with engine.connect() as conn:
         stmts = [
-            # Pre-auth schema
-            "ALTER TABLE feeds ADD COLUMN user_id INTEGER REFERENCES users(id)",
-            # ETag / Last-Modified caching
-            "ALTER TABLE feeds ADD COLUMN etag TEXT",
-            "ALTER TABLE feeds ADD COLUMN last_modified TEXT",
-            # FTS5 virtual table (full-text search)
-            """CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
-               USING fts5(title, summary, content, content='articles', content_rowid='id')""",
-            # FTS5 sync triggers
-            """CREATE TRIGGER IF NOT EXISTS articles_fts_insert
-               AFTER INSERT ON articles BEGIN
-                 INSERT INTO articles_fts(rowid, title, summary, content)
-                 VALUES (new.id, new.title, new.summary, new.content);
-               END""",
-            """CREATE TRIGGER IF NOT EXISTS articles_fts_delete
-               BEFORE DELETE ON articles BEGIN
-                 INSERT INTO articles_fts(articles_fts, rowid, title, summary, content)
-                 VALUES ('delete', old.id, old.title, old.summary, old.content);
-               END""",
-            """CREATE TRIGGER IF NOT EXISTS articles_fts_update
-               AFTER UPDATE ON articles BEGIN
-                 INSERT INTO articles_fts(articles_fts, rowid, title, summary, content)
-                 VALUES ('delete', old.id, old.title, old.summary, old.content);
-                 INSERT INTO articles_fts(rowid, title, summary, content)
-                 VALUES (new.id, new.title, new.summary, new.content);
-               END""",
-            # Backfill FTS from existing articles
-            """INSERT INTO articles_fts(rowid, title, summary, content)
-               SELECT id, title, summary, content FROM articles
-               WHERE id NOT IN (SELECT rowid FROM articles_fts)""",
-            # Tags and full content storage
-            "ALTER TABLE articles ADD COLUMN tags TEXT",
-            "ALTER TABLE articles ADD COLUMN full_content TEXT",
+            # Subscription plan — gates feed-count / full-content-fetch limits
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(32) NOT NULL DEFAULT 'free'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMPTZ",
+            # Reading stats: timestamp of when an article was marked read
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ",
+            # Full-text search: keep articles.search_vector in sync via trigger
+            """CREATE OR REPLACE FUNCTION articles_search_vector_update() RETURNS trigger AS $$
+               BEGIN
+                 NEW.search_vector := to_tsvector('english',
+                   coalesce(NEW.title, '') || ' ' || coalesce(NEW.summary, '') || ' ' || coalesce(NEW.content, ''));
+                 RETURN NEW;
+               END
+               $$ LANGUAGE plpgsql""",
+            "DROP TRIGGER IF EXISTS articles_search_vector_trigger ON articles",
+            """CREATE TRIGGER articles_search_vector_trigger
+               BEFORE INSERT OR UPDATE OF title, summary, content ON articles
+               FOR EACH ROW EXECUTE FUNCTION articles_search_vector_update()""",
+            "CREATE INDEX IF NOT EXISTS ix_articles_search_vector ON articles USING GIN (search_vector)",
+            # Backfill search_vector for rows written before the trigger existed
+            """UPDATE articles SET search_vector = to_tsvector('english',
+                 coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
+               WHERE search_vector IS NULL""",
         ]
         for stmt in stmts:
             try:
@@ -79,12 +70,14 @@ app = FastAPI(
         "- **Auth** — Google OAuth2 login; JWT Bearer tokens on all protected routes\n"
         "- **Feeds** — subscribe, update, refresh, and unsubscribe; ETag/Last-Modified caching\n"
         "- **Categories** — organise feeds into folders; many-to-many relationship\n"
-        "- **Articles** — list, paginate, full-text search (SQLite FTS5), read/unread, bookmark\n"
+        "- **Articles** — list, paginate, full-text search (PostgreSQL tsvector), read/unread, bookmark\n"
         "- **OPML** — bulk import from file; export all feeds as standard OPML\n"
-        "- **Auto-refresh** — background scheduler refreshes all active feeds every 30 minutes\n"
-        "- **SSE** — live new-article stream over Server-Sent Events\n"
+        "- **Auto-refresh** — Celery beat dispatches a refresh of all active feeds every 30 minutes\n"
+        "- **SSE** — live new-article stream over Server-Sent Events, backed by Redis pub/sub\n"
         "- **Search** — query the Feedly public index or discover feeds on any website\n"
-        "- **Rate limiting** — 200 req/min per IP; refresh endpoint capped at 10/min\n\n"
+        "- **Plans & billing** — free / paid tiers gating feed count and full-content "
+        "fetches; upgrades via Razorpay Checkout (orders, signature verification, webhooks)\n"
+        "- **Rate limiting** — 200 req/min per IP (Redis-backed); refresh endpoint capped at 10/min\n\n"
         "## Authentication\n"
         "All `/feeds`, `/articles`, `/categories`, and `/opml` routes require "
         "`Authorization: Bearer <token>`.\n\n"
@@ -115,8 +108,10 @@ app.include_router(articles.router,   prefix="/api/v1")
 app.include_router(highlights.router, prefix="/api/v1")
 app.include_router(categories.router, prefix="/api/v1")
 app.include_router(opml.router,       prefix="/api/v1")
+app.include_router(payments.router,   prefix="/api/v1")
 app.include_router(stream.router,     prefix="/api/v1")
 app.include_router(search.router,     prefix="/api/v1")
+app.include_router(collections.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")
