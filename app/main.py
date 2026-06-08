@@ -34,6 +34,8 @@ def _migrate() -> None:
             # Subscription plan — gates feed-count / full-content-fetch limits
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(32) NOT NULL DEFAULT 'free'",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMPTZ",
+            # Synced client preferences (theme, layout, default view, reader font, saved searches)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB",
             # Reading stats: timestamp of when an article was marked read
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ",
             # Full-text search: keep articles.search_vector in sync via trigger

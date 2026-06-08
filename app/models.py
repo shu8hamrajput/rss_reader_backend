@@ -3,7 +3,7 @@ from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer,
     String, Table, Text, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -37,6 +37,10 @@ class User(Base):
     plan: Mapped[str] = mapped_column(String(32), default="free", server_default="free", nullable=False)
     # When a paid plan lapses, effective_plan() falls back to "free" — see services.plans
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Cross-device sync for client-side preferences (theme, layout, default view,
+    # reader font, saved searches, ...) — keyed by top-level section, e.g.
+    # {"settings": {...}, "layout": {...}, "saved_searches": [...]}
+    preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

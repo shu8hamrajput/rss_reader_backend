@@ -15,6 +15,9 @@ class UserResponse(BaseModel):
     plan: str
     created_at: datetime
     last_login_at: datetime
+    # Synced client preferences (theme, layout, default view, reader font, saved
+    # searches, ...) — opaque to the backend, merged shallowly on update
+    preferences: dict | None = None
 
 
 class TokenResponse(BaseModel):
@@ -22,6 +25,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
+
+class PreferencesUpdate(BaseModel):
+    preferences: dict
 
 
 class GoogleTokenRequest(BaseModel):
