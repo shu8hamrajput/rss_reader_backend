@@ -7,7 +7,7 @@ extract the article body reliably. Falls back to the default scraper if none
 of the specific selectors match.
 """
 
-from _default import fetch as default_fetch
+from ._default import fetch as default_fetch
 
 
 async def fetch(url: str) -> str | None:

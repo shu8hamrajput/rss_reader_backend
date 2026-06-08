@@ -1,41 +1,39 @@
 """
-In-memory pub/sub event bus for SSE.
+Pub/sub event bus for SSE, backed by Redis.
 
-The scheduler publishes new-article events; SSE clients subscribe per user.
-No persistence — events are lost if the server restarts or no client is connected.
+The Celery refresh task publishes new-article events; SSE clients subscribe
+per user. Using Redis (instead of an in-process queue) means events reach
+subscribers regardless of which app instance — or the Celery worker —
+produced them, and survive an individual app worker restarting.
 """
-import asyncio
-from collections import defaultdict
+import json
 from typing import AsyncGenerator
 
-_queues: dict[int, list[asyncio.Queue]] = defaultdict(list)
+from ..redis_client import async_redis_client, redis_client
+
+_CHANNEL_PREFIX = "sse:user:"
 
 
-def subscribe(user_id: int) -> asyncio.Queue:
-    q: asyncio.Queue = asyncio.Queue()
-    _queues[user_id].append(q)
-    return q
+def _channel(user_id: int) -> str:
+    return f"{_CHANNEL_PREFIX}{user_id}"
 
 
-def unsubscribe(user_id: int, q: asyncio.Queue) -> None:
-    try:
-        _queues[user_id].remove(q)
-    except ValueError:
-        pass
-    if not _queues[user_id]:
-        del _queues[user_id]
-
-
-async def publish(user_id: int, event: dict) -> None:
-    for q in list(_queues.get(user_id, [])):
-        await q.put(event)
+def publish(user_id: int, event: dict) -> None:
+    """Synchronous publish — used by Celery tasks (sync worker context)."""
+    redis_client.publish(_channel(user_id), json.dumps(event))
 
 
 async def event_stream(user_id: int) -> AsyncGenerator[dict, None]:
-    q = subscribe(user_id)
+    pubsub = async_redis_client.pubsub()
+    await pubsub.subscribe(_channel(user_id))
     try:
-        while True:
-            event = await q.get()
-            yield event
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            try:
+                yield json.loads(message["data"])
+            except (TypeError, ValueError):
+                continue
     finally:
-        unsubscribe(user_id, q)
+        await pubsub.unsubscribe(_channel(user_id))
+        await pubsub.aclose()

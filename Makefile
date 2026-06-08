@@ -27,18 +27,41 @@ dev: ## Run dev server with auto-reload (port 8080)
 run: ## Run production server locally (no reload, single worker)
 	$(PYTHON) -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+.PHONY: worker
+worker: ## Run a Celery worker (executes the periodic feed-refresh task)
+	$(PYTHON) -m celery -A app.celery_app worker --loglevel=info
+
+.PHONY: beat
+beat: ## Run Celery beat (schedules the periodic feed-refresh task every 30 min)
+	$(PYTHON) -m celery -A app.celery_app beat --loglevel=info
+
+# ── Docker Compose (Postgres + Redis + RabbitMQ + API + worker + beat) ───────
+
+.PHONY: up
+up: ## Start the full stack (Postgres, Redis, RabbitMQ, API, worker, beat)
+	docker compose up --build
+
+.PHONY: up-d
+up-d: ## Start the full stack in the background
+	docker compose up --build -d
+
+.PHONY: down
+down: ## Stop and remove the full stack
+	docker compose down
+
+.PHONY: down-v
+down-v: ## Stop the stack and delete its volumes (Postgres/Redis/RabbitMQ data)
+	docker compose down -v
+
+.PHONY: compose-logs
+compose-logs: ## Tail logs from every service in the stack
+	docker compose logs -f
+
+# ── Docker (single image) ─────────────────────────────────────────────────────
 
 .PHONY: docker-build
 docker-build: ## Build Docker image tagged as $(APP):latest
 	docker build -t $(APP):latest .
-
-.PHONY: docker-run
-docker-run: ## Run Docker image locally (port 8080, ephemeral DB)
-	docker run --rm -p 8080:8080 \
-		-e DATABASE_URL=sqlite:////data/rss_reader.db \
-		-v $(PWD)/data:/data \
-		$(APP):latest
 
 .PHONY: docker-stop
 docker-stop: ## Stop all running containers for this image
@@ -78,16 +101,15 @@ secrets-set: ## Set secrets from a local .env file  →  make secrets-set ENV=.e
 scale: ## Show current VM count and size
 	fly scale show --app $(APP)
 
-# ── Database (Fly volume / SQLite) ────────────────────────────────────────────
+# ── Database (PostgreSQL) ─────────────────────────────────────────────────────
 
 .PHONY: db-shell
-db-shell: ## Open SQLite shell on the remote Fly volume
-	fly ssh console --app $(APP) --command "sqlite3 /data/rss_reader.db"
+db-shell: ## Open a psql shell against $(DATABASE_URL) (defaults to local docker-compose Postgres)
+	docker compose exec postgres psql -U postgres -d rss_reader
 
-.PHONY: db-download
-db-download: ## Download a copy of the remote DB to ./rss_reader.db.bak
-	fly ssh sftp get --app $(APP) /data/rss_reader.db rss_reader.db.bak
-	@echo "Saved to rss_reader.db.bak"
+.PHONY: db-shell-remote
+db-shell-remote: ## Open a psql shell on the remote Fly Postgres app  →  make db-shell-remote APP=rss-reader-db
+	fly postgres connect --app $(APP)
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
