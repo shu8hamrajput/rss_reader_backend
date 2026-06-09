@@ -95,6 +95,27 @@ async def _apply_parsed_to_feed(
         guid = entry.get("id") or entry.get("link") or entry.get("title", "")
         if not guid or guid in existing_guids:
             continue
+        enclosures = entry.get('enclosures', [])
+        media_type = media_url = None
+        duration_seconds = None
+        if enclosures:
+            enc = enclosures[0]
+            media_type = enc.get('type')
+            media_url = enc.get('href') or enc.get('url')
+
+        raw_dur = entry.get('itunes_duration')
+        if raw_dur and isinstance(raw_dur, str):
+            parts = raw_dur.split(':')
+            try:
+                if len(parts) == 3:
+                    duration_seconds = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                elif len(parts) == 2:
+                    duration_seconds = int(parts[0])*60 + int(parts[1])
+                else:
+                    duration_seconds = int(raw_dur)
+            except ValueError:
+                pass
+
         article = Article(
             feed_id=feed.id,
             guid=guid,
@@ -105,6 +126,9 @@ async def _apply_parsed_to_feed(
             content=_get_content(entry),
             thumbnail_url=_get_thumbnail(entry),
             published_at=_parse_date(entry),
+            media_type=media_type,
+            media_url=media_url,
+            duration_seconds=duration_seconds,
         )
         db.add(article)
         new_articles.append(article)

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer,
     String, Table, Text, UniqueConstraint,
@@ -118,6 +119,9 @@ class Article(Base):
     # JSON array of user-defined tag strings, e.g. ["read_later","saved_later"]
     tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     full_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    media_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Postgres full-text search vector (title + summary + content), kept in
     # sync by a DB trigger — see _migrate() in main.py
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)

@@ -134,6 +134,9 @@ class ArticleResponse(BaseModel):
     is_read: bool
     is_bookmarked: bool
     tags: list[str] = []
+    media_type: str | None = None
+    media_url: str | None = None
+    duration_seconds: int | None = None
     created_at: datetime
 
     @field_validator("tags", mode="before")
