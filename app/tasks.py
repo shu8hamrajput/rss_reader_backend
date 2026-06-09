@@ -8,6 +8,7 @@ published to Redis so connected SSE clients still get live updates.
 import asyncio
 import logging
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from .celery_app import celery_app
 from .database import SessionLocal
@@ -37,15 +38,22 @@ def refresh_all_feeds() -> None:
         for url, feed_group in url_groups.items():
             try:
                 results = asyncio.run(refresh_url_for_all_subscribers(feed_group, db))
+                now = datetime.now(timezone.utc)
                 for feed in feed_group:
+                    feed.fetch_failure_count = 0
+                    feed.last_success_at = now
                     new_count = results.get(feed.id, 0)
                     if new_count > 0:
                         publish(
                             feed.user_id,
                             {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                         )
+                db.commit()
             except Exception as exc:
                 logger.warning("Failed to refresh URL %s: %s", url, exc)
+                for feed in feed_group:
+                    feed.fetch_failure_count += 1
+                db.commit()
     finally:
         db.close()
 
@@ -58,13 +66,22 @@ def refresh_feed_by_id(feed_id: int) -> int:
         feed = db.query(Feed).filter(Feed.id == feed_id).first()
         if not feed:
             return 0
-        results = asyncio.run(refresh_url_for_all_subscribers([feed], db))
-        new_count = results.get(feed.id, 0)
-        if new_count > 0:
-            publish(
-                feed.user_id,
-                {"type": "new_articles", "feed_id": feed.id, "count": new_count},
-            )
-        return new_count
+        try:
+            results = asyncio.run(refresh_url_for_all_subscribers([feed], db))
+            feed.fetch_failure_count = 0
+            feed.last_success_at = datetime.now(timezone.utc)
+            db.commit()
+            new_count = results.get(feed.id, 0)
+            if new_count > 0:
+                publish(
+                    feed.user_id,
+                    {"type": "new_articles", "feed_id": feed.id, "count": new_count},
+                )
+            return new_count
+        except Exception as exc:
+            logger.warning("Failed to refresh feed %d: %s", feed_id, exc)
+            feed.fetch_failure_count += 1
+            db.commit()
+            return 0
     finally:
         db.close()

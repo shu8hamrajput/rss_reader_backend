@@ -1,6 +1,7 @@
 import json
-from datetime import datetime
-from pydantic import BaseModel, field_validator, ConfigDict
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 
 
 # ── Auth / User schemas ───────────────────────────────────────────────────────
@@ -29,6 +30,11 @@ class TokenResponse(BaseModel):
 
 class PreferencesUpdate(BaseModel):
     preferences: dict
+
+
+class PreferencesResponse(BaseModel):
+    preferences: dict
+    updated_at: Optional[datetime] = None
 
 
 class GoogleTokenRequest(BaseModel):
@@ -105,9 +111,25 @@ class FeedResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_fetched_at: datetime | None
+    fetch_failure_count: int = 0
+    last_success_at: Optional[datetime] = None
+    health_status: str = "healthy"
     article_count: int = 0
     unread_count: int = 0
     categories: list[CategoryResponse] = []
+
+    @model_validator(mode="after")
+    def compute_health_status(self) -> "FeedResponse":
+        if self.fetch_failure_count >= 3:
+            self.health_status = "failing"
+        elif (
+            self.last_success_at is None
+            or self.last_success_at < datetime.now(timezone.utc) - timedelta(days=30)
+        ):
+            self.health_status = "stale"
+        else:
+            self.health_status = "healthy"
+        return self
 
 
 class FeedListResponse(BaseModel):

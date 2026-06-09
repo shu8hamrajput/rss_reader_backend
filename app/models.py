@@ -4,8 +4,12 @@ from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer,
     String, Table, Text, UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import JSON
+from sqlalchemy import func
+from sqlalchemy import TIMESTAMP
 
 from .database import Base
 
@@ -88,6 +92,8 @@ class Feed(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetch_failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default='0')
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
@@ -209,6 +215,17 @@ class CollectionItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     collection: Mapped["Collection"] = relationship("Collection", back_populates="items")
+
+
+# ── User Preferences (separate table for per-user JSON blob) ──────────────────
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class CollectionSubscription(Base):
