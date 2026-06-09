@@ -38,6 +38,10 @@ def _migrate() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB",
             # Reading stats: timestamp of when an article was marked read
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ",
+            # Podcast / rich-media enclosure fields
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS media_type VARCHAR(100)",
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS media_url TEXT",
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS duration_seconds INTEGER",
             # Full-text search: keep articles.search_vector in sync via trigger
             """CREATE OR REPLACE FUNCTION articles_search_vector_update() RETURNS trigger AS $$
                BEGIN
