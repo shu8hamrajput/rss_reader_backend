@@ -32,6 +32,11 @@ class PreferencesUpdate(BaseModel):
     preferences: dict
 
 
+class PreferencesResponse(BaseModel):
+    preferences: dict
+    updated_at: Optional[datetime] = None
+
+
 class GoogleTokenRequest(BaseModel):
     code: str
     redirect_uri: str
