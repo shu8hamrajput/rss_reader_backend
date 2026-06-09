@@ -23,7 +23,7 @@ from ..auth import create_access_token, generate_oauth_state, get_current_user, 
 from ..config import settings
 from ..database import get_db
 from ..models import User
-from ..schemas import GoogleTokenRequest, TokenResponse, UserResponse
+from ..schemas import GoogleTokenRequest, PreferencesUpdate, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -193,4 +193,25 @@ async def google_token_exchange(payload: GoogleTokenRequest, db: Session = Depen
     summary="Get the currently authenticated user",
 )
 def get_me(current_user: User = Depends(get_current_user)):
+    return UserResponse.model_validate(current_user)
+
+
+@router.patch(
+    "/me/preferences",
+    response_model=UserResponse,
+    summary="Sync the current user's client-side preferences",
+)
+def update_my_preferences(
+    payload: PreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Shallow-merges the given top-level sections (settings, layout,
+    saved_searches, ...) into the stored preferences blob, so this endpoint
+    works whether the client pushes the whole thing or a single section."""
+    merged = dict(current_user.preferences or {})
+    merged.update(payload.preferences)
+    current_user.preferences = merged
+    db.commit()
+    db.refresh(current_user)
     return UserResponse.model_validate(current_user)
