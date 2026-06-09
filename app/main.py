@@ -51,6 +51,9 @@ def _migrate() -> None:
                BEFORE INSERT OR UPDATE OF title, summary, content ON articles
                FOR EACH ROW EXECUTE FUNCTION articles_search_vector_update()""",
             "CREATE INDEX IF NOT EXISTS ix_articles_search_vector ON articles USING GIN (search_vector)",
+            # Feed health tracking
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS fetch_failure_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
             # Backfill search_vector for rows written before the trigger existed
             """UPDATE articles SET search_vector = to_tsvector('english',
                  coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))

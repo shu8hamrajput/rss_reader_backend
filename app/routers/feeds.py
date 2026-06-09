@@ -89,6 +89,20 @@ async def create_feed(
     return _build_feed_response(feed, db)
 
 
+@router.get("/health", response_model=FeedListResponse, summary="List feeds sorted by health (worst first)")
+def list_feeds_health(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    feeds = (
+        db.query(Feed)
+        .filter(Feed.user_id == current_user.id)
+        .order_by(Feed.fetch_failure_count.desc(), Feed.last_success_at.asc().nullsfirst())
+        .all()
+    )
+    return FeedListResponse(total=len(feeds), items=[_build_feed_response(f, db) for f in feeds])
+
+
 @router.get("", response_model=FeedListResponse, summary="List your subscribed feeds")
 def list_feeds(
     active_only: bool = Query(False),
