@@ -69,6 +69,8 @@ def _migrate() -> None:
                  preferences JSONB NOT NULL DEFAULT '{}',
                  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                )""",
+            # JWT revocation: bump token_version to invalidate all tokens for a user
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0",
         ]
         for stmt in stmts:
             try:

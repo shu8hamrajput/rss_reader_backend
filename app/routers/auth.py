@@ -94,7 +94,7 @@ def _upsert_user(google_info: dict, db: Session) -> User:
 
 
 def _build_token_response(user: User) -> TokenResponse:
-    token, expires_in = create_access_token(user.id, user.email)
+    token, expires_in = create_access_token(user.id, user.email, user.token_version)
     return TokenResponse(
         access_token=token,
         expires_in=expires_in,
@@ -212,6 +212,27 @@ def update_my_preferences(
     merged = dict(current_user.preferences or {})
     merged.update(payload.preferences)
     current_user.preferences = merged
+    db.commit()
+    db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
+@router.post(
+    "/signout-everywhere",
+    response_model=UserResponse,
+    summary="Invalidate all existing sessions",
+    description=(
+        "Bumps the user's token_version, instantly revoking all previously issued JWTs. "
+        "The caller's own token becomes invalid after this call — they should clear their "
+        "local token and redirect to login."
+    ),
+)
+def signout_everywhere(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Invalidate all existing sessions by bumping token_version."""
+    current_user.token_version += 1
     db.commit()
     db.refresh(current_user)
     return UserResponse.model_validate(current_user)
