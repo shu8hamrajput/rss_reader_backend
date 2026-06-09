@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import articles, auth, categories, collections, feeds, highlights, opml, payments, preferences, search, stream
+from .routers import alerts, articles, auth, categories, collections, export, feeds, highlights, opml, payments, preferences, rules, search, stream, webhooks
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -71,6 +71,75 @@ def _migrate() -> None:
                )""",
             # JWT revocation: bump token_version to invalidate all tokens for a user
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0",
+            # Personal API token for scripting / third-party integrations
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS api_token VARCHAR(64) UNIQUE",
+            # Saved-search alerts: notify user when new articles match a stored query
+            """CREATE TABLE IF NOT EXISTS search_alerts (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 query VARCHAR(512) NOT NULL,
+                 label VARCHAR(256),
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 last_matched_at TIMESTAMPTZ,
+                 UNIQUE(user_id, query)
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_search_alerts_user_id ON search_alerts (user_id)",
+            # Podcast playback position — stores where the user left off for cross-device resume
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS resume_at_seconds INTEGER",
+            # iTunes / podcast metadata fields
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS episode_number VARCHAR(32)",
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS itunes_author VARCHAR(256)",
+            # Feed health snooze — suppresses failing/stale status until this timestamp
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS health_snooze_until TIMESTAMPTZ",
+            # User login sessions — device tracking
+            """CREATE TABLE IF NOT EXISTS user_sessions (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 device_info VARCHAR(512),
+                 ip_address VARCHAR(64),
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_user_sessions_user_id ON user_sessions (user_id)",
+            # Reading depth (scroll position) for cross-device text article resume
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS scroll_pct SMALLINT",
+            # Story clustering — articles covering the same event share a UUID
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS story_cluster_id VARCHAR(36)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_story_cluster ON articles (story_cluster_id) WHERE story_cluster_id IS NOT NULL",
+            # Spaced repetition for highlights
+            "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ",
+            # Feed velocity — rolling 7-day average articles/day for anomaly detection
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS articles_per_day_avg FLOAT",
+            # User-configurable webhooks for integrations (Readwise, Obsidian, Zapier)
+            """CREATE TABLE IF NOT EXISTS user_webhooks (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 url VARCHAR(2048) NOT NULL,
+                 events TEXT NOT NULL DEFAULT '["new_article"]',
+                 secret VARCHAR(256),
+                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 last_fired_at TIMESTAMPTZ
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_user_webhooks_user_id ON user_webhooks (user_id)",
+            # Article routing rules
+            """CREATE TABLE IF NOT EXISTS article_rules (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 name VARCHAR(200) NOT NULL,
+                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                 conditions JSON NOT NULL DEFAULT '[]',
+                 actions JSON NOT NULL DEFAULT '[]',
+                 match_count INTEGER NOT NULL DEFAULT 0,
+                 "order" INTEGER NOT NULL DEFAULT 0,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_article_rules_user_id ON article_rules (user_id)",
+            # Highlight annotation — captured text + user note
+            "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS text TEXT",
+            "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS note TEXT",
+            # Article-level note — user's freeform annotation for the whole article
+            "ALTER TABLE articles ADD COLUMN IF NOT EXISTS article_note TEXT",
         ]
         for stmt in stmts:
             try:
@@ -131,6 +200,10 @@ app.include_router(stream.router,     prefix="/api/v1")
 app.include_router(search.router,     prefix="/api/v1")
 app.include_router(collections.router,  prefix="/api/v1")
 app.include_router(preferences.router,  prefix="/api/v1")
+app.include_router(alerts.router,       prefix="/api/v1")
+app.include_router(webhooks.router,     prefix="/api/v1")
+app.include_router(rules.router,        prefix="/api/v1")
+app.include_router(export.router,       prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

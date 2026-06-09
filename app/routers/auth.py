@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session
 from ..auth import create_access_token, generate_oauth_state, get_current_user, verify_oauth_state
 from ..config import settings
 from ..database import get_db
-from ..models import User
-from ..schemas import GoogleTokenRequest, PreferencesUpdate, TokenResponse, UserResponse
+from ..models import User, UserPreferences, UserSession
+import secrets
+from ..schemas import ApiTokenResponse, GoogleTokenRequest, PreferencesResponse, PreferencesUpdate, SessionResponse, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -71,6 +72,26 @@ async def _exchange_code(code: str, redirect_uri: str) -> dict:
         if user_resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to fetch Google user info")
         return user_resp.json()
+
+
+def _record_session(user: User, request: "Request | None", db: Session) -> None:
+    """Create or refresh a session record for the user based on IP + device fingerprint."""
+    from ..models import UserSession
+    if request is None:
+        return
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("User-Agent", "")[:512]
+    # Update existing session from same IP+UA pair, or create a new one
+    existing = db.query(UserSession).filter(
+        UserSession.user_id == user.id,
+        UserSession.ip_address == ip,
+        UserSession.device_info == ua,
+    ).first()
+    now = datetime.now(timezone.utc)
+    if existing:
+        existing.last_seen_at = now
+    else:
+        db.add(UserSession(user_id=user.id, ip_address=ip, device_info=ua, last_seen_at=now))
 
 
 def _upsert_user(google_info: dict, db: Session) -> User:
@@ -144,6 +165,7 @@ async def google_login(response: Response):
     status_code=302,
 )
 async def google_callback(
+    request: Request,
     code: str = Query(...),
     state: str = Query(...),
     oauth_state: str | None = Cookie(default=None),
@@ -156,6 +178,8 @@ async def google_callback(
 
     google_info = await _exchange_code(code, settings.google_redirect_uri)
     user = _upsert_user(google_info, db)
+    _record_session(user, request, db)
+    db.commit()
     token_response = _build_token_response(user)
 
     separator = '&' if '?' in settings.frontend_url else '?'
@@ -178,10 +202,12 @@ async def google_callback(
         "Returns a JWT on success."
     ),
 )
-async def google_token_exchange(payload: GoogleTokenRequest, db: Session = Depends(get_db)):
+async def google_token_exchange(request: Request, payload: GoogleTokenRequest, db: Session = Depends(get_db)):
     _require_google_config()
     google_info = await _exchange_code(payload.code, payload.redirect_uri)
     user = _upsert_user(google_info, db)
+    _record_session(user, request, db)
+    db.commit()
     return _build_token_response(user)
 
 
@@ -206,15 +232,57 @@ def update_my_preferences(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Shallow-merges the given top-level sections (settings, layout,
-    saved_searches, ...) into the stored preferences blob, so this endpoint
-    works whether the client pushes the whole thing or a single section."""
+    """Shallow-merges the given top-level sections into the stored preferences blob."""
     merged = dict(current_user.preferences or {})
     merged.update(payload.preferences)
     current_user.preferences = merged
     db.commit()
     db.refresh(current_user)
     return UserResponse.model_validate(current_user)
+
+
+def _get_or_create_user_prefs(user_id: int, db: Session) -> UserPreferences:
+    row = db.query(UserPreferences).filter(UserPreferences.user_id == user_id).first()
+    if not row:
+        row = UserPreferences(user_id=user_id, preferences={})
+        db.add(row)
+        db.flush()
+    return row
+
+
+@router.get(
+    "/me/preferences",
+    response_model=PreferencesResponse,
+    summary="Get the current user's synced preferences",
+)
+def get_my_preferences(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = _get_or_create_user_prefs(current_user.id, db)
+    db.commit()
+    return PreferencesResponse(preferences=row.preferences, updated_at=row.updated_at)
+
+
+@router.put(
+    "/me/preferences",
+    response_model=PreferencesResponse,
+    summary="Replace the current user's synced preferences",
+)
+def put_my_preferences(
+    payload: PreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Full replacement of top-level sections; shallow-merges sections within the blob
+    so a client pushing only {settings: ...} doesn't wipe layout or saved_searches."""
+    row = _get_or_create_user_prefs(current_user.id, db)
+    merged = dict(row.preferences or {})
+    merged.update(payload.preferences)
+    row.preferences = merged
+    db.commit()
+    db.refresh(row)
+    return PreferencesResponse(preferences=row.preferences, updated_at=row.updated_at)
 
 
 @router.post(
@@ -236,3 +304,91 @@ def signout_everywhere(
     db.commit()
     db.refresh(current_user)
     return UserResponse.model_validate(current_user)
+
+
+# ── Personal API token ────────────────────────────────────────────────────────
+
+@router.post(
+    "/me/token",
+    response_model=ApiTokenResponse,
+    summary="Generate a personal API token",
+    description=(
+        "Generates a new personal API token. Any previous token is revoked. "
+        "Pass the token as `X-API-Key: <token>` on API requests as an alternative to Bearer JWT."
+    ),
+)
+def generate_api_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    token = secrets.token_hex(32)
+    current_user.api_token = token
+    db.commit()
+    return ApiTokenResponse(api_token=token)
+
+
+@router.delete(
+    "/me/token",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke the personal API token",
+)
+def revoke_api_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.api_token = None
+    db.commit()
+
+
+# ── Delete account ────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete the authenticated user's account and all data",
+)
+def delete_account(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    db.delete(current_user)
+    db.commit()
+
+
+# ── Active Sessions ───────────────────────────────────────────────────────────
+
+@router.get(
+    "/sessions",
+    response_model=list[SessionResponse],
+    summary="List active login sessions",
+)
+def list_sessions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return (
+        db.query(UserSession)
+        .filter(UserSession.user_id == current_user.id)
+        .order_by(UserSession.last_seen_at.desc())
+        .all()
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=204,
+    summary="Remove a login session record",
+)
+def delete_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    session = db.query(UserSession).filter(
+        UserSession.id == session_id,
+        UserSession.user_id == current_user.id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.delete(session)
+    db.commit()

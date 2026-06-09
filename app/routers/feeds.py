@@ -10,6 +10,7 @@ from ..schemas import (
     FeedCreate,
     FeedListResponse,
     FeedResponse,
+    FeedSnoozeRequest,
     FeedUpdate,
     RefreshResult,
 )
@@ -142,6 +143,35 @@ def update_feed(
         feed.is_active = payload.is_active
     if payload.category_ids is not None:
         _apply_categories(feed, payload.category_ids, current_user, db)
+    db.commit()
+    db.refresh(feed)
+    return _build_feed_response(feed, db)
+
+
+@router.post("/{feed_id}/snooze", response_model=FeedResponse, summary="Snooze health warnings for a feed")
+def snooze_feed(
+    feed_id: int,
+    payload: FeedSnoozeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from datetime import datetime, timedelta, timezone
+    feed = _owned_feed(feed_id, current_user, db)
+    feed.health_snooze_until = datetime.now(timezone.utc) + timedelta(days=max(1, min(payload.days, 365)))
+    feed.fetch_failure_count = 0
+    db.commit()
+    db.refresh(feed)
+    return _build_feed_response(feed, db)
+
+
+@router.delete("/{feed_id}/snooze", response_model=FeedResponse, summary="Cancel health snooze for a feed")
+def unsnooze_feed(
+    feed_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    feed = _owned_feed(feed_id, current_user, db)
+    feed.health_snooze_until = None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

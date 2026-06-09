@@ -47,6 +47,7 @@ class User(Base):
     # {"settings": {...}, "layout": {...}, "saved_searches": [...]}
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default='0', default=0)
+    api_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -56,6 +57,9 @@ class User(Base):
     collections: Mapped[list["Collection"]] = relationship(
         "Collection", back_populates="owner", cascade="all, delete-orphan", foreign_keys="Collection.owner_id"
     )
+    search_alerts: Mapped[list["SearchAlert"]] = relationship("SearchAlert", back_populates="user", cascade="all, delete-orphan")
+    sessions: Mapped[list["UserSession"]] = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    webhooks: Mapped[list["UserWebhook"]] = relationship("UserWebhook", back_populates="user", cascade="all, delete-orphan")
 
 
 # ── Categories ────────────────────────────────────────────────────────────────
@@ -95,6 +99,9 @@ class Feed(Base):
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fetch_failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default='0')
     last_success_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    health_snooze_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Rolling 7-day average articles/day — used for velocity anomaly detection
+    articles_per_day_avg: Mapped[Optional[float]] = mapped_column(nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
@@ -129,6 +136,15 @@ class Article(Base):
     media_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     media_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    resume_at_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    episode_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    itunes_author: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    # Reading depth (0-100 scroll %) — cross-device resume for text articles
+    scroll_pct: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Story cluster UUID — articles covering the same event share this ID
+    story_cluster_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # User-written note attached to the whole article (independent of highlights)
+    article_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Postgres full-text search vector (title + summary + content), kept in
     # sync by a DB trigger — see _migrate() in main.py
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
@@ -151,6 +167,10 @@ class Highlight(Base):
     start_pos: Mapped[int] = mapped_column(Integer, nullable=False)
     end_pos: Mapped[int] = mapped_column(Integer, nullable=False)
     color_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Spaced repetition — timestamp of last review; NULL means never reviewed
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     article: Mapped["Article"] = relationship("Article", back_populates="highlights")
@@ -240,3 +260,71 @@ class CollectionSubscription(Base):
 
     collection: Mapped["Collection"] = relationship("Collection", back_populates="subscriptions")
     user: Mapped["User"] = relationship("User")
+
+
+# ── Search Alerts ─────────────────────────────────────────────────────────────
+
+# ── User Sessions ─────────────────────────────────────────────────────────────
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_info: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["User"] = relationship("User", back_populates="sessions")
+
+
+class SearchAlert(Base):
+    __tablename__ = "search_alerts"
+    __table_args__ = (UniqueConstraint("user_id", "query", name="uq_search_alert_user_query"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    query: Mapped[str] = mapped_column(String(512), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_matched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship("User", back_populates="search_alerts")
+
+
+# ── User Webhooks ─────────────────────────────────────────────────────────────
+
+class UserWebhook(Base):
+    __tablename__ = "user_webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # JSON array of event types: ["new_article", "highlight_created", "alert_matched"]
+    events: Mapped[str] = mapped_column(Text, nullable=False, default='["new_article"]')
+    # HMAC secret for payload signing; NULL = no signing
+    secret: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship("User", back_populates="webhooks")
+
+
+# ── Article routing rules ─────────────────────────────────────────────────────
+
+class ArticleRule(Base):
+    __tablename__ = "article_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # JSON list of condition objects: [{field, op, value}, ...]
+    conditions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # JSON list of action objects: [{type, value?}, ...]
+    actions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    match_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
