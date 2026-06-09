@@ -14,6 +14,8 @@ from ..schemas import (
     ArticleListResponse,
     ArticleReadUpdate,
     ArticleResponse,
+    ArticleTagsUpdate,
+    UserTagsResponse,
     BulkActionResponse,
     BulkBookmarkRequest,
     BulkMarkReadRequest,
@@ -420,3 +422,49 @@ def bulk_mark_read(
             _remove_tag(article, "read")
     db.commit()
     return BulkActionResponse(updated=len(articles))
+
+
+# System-managed tags that users should not overwrite via the tags endpoint
+_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
+
+
+@router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")
+def get_user_tags(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Returns the union of all non-system tags the user has applied across their articles."""
+    rows = (
+        db.query(Article.tags)
+        .join(Feed)
+        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
+        .all()
+    )
+    seen: set[str] = set()
+    for (raw,) in rows:
+        try:
+            for t in json.loads(raw or "[]"):
+                if t not in _SYSTEM_TAGS:
+                    seen.add(t)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return UserTagsResponse(tags=sorted(seen))
+
+
+@router.patch("/{article_id}/tags", response_model=ArticleResponse, summary="Replace user-defined tags on an article")
+def update_article_tags(
+    article_id: int,
+    payload: ArticleTagsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Replaces the user-defined portion of the article's tag list, preserving any
+    system tags (saved_later, read_later, read, unread) that are already present."""
+    article = _owned_article(article_id, current_user, db)
+    existing_system = [t for t in _get_tags(article) if t in _SYSTEM_TAGS]
+    # Reject obviously invalid tag values (no whitespace, max length)
+    new_user_tags = [t.strip() for t in payload.tags if t.strip() and len(t.strip()) <= 64]
+    _set_tags(article, existing_system + new_user_tags)
+    db.commit()
+    db.refresh(article)
+    return ArticleResponse.model_validate(article)

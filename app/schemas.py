@@ -1,6 +1,7 @@
 import json
-from datetime import datetime
-from pydantic import BaseModel, field_validator, ConfigDict
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 
 
 # ── Auth / User schemas ───────────────────────────────────────────────────────
@@ -15,6 +16,9 @@ class UserResponse(BaseModel):
     plan: str
     created_at: datetime
     last_login_at: datetime
+    # Synced client preferences (theme, layout, default view, reader font, saved
+    # searches, ...) — opaque to the backend, merged shallowly on update
+    preferences: dict | None = None
 
 
 class TokenResponse(BaseModel):
@@ -22,6 +26,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
+
+class PreferencesUpdate(BaseModel):
+    preferences: dict
 
 
 class GoogleTokenRequest(BaseModel):
@@ -98,9 +106,25 @@ class FeedResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_fetched_at: datetime | None
+    fetch_failure_count: int = 0
+    last_success_at: Optional[datetime] = None
+    health_status: str = "healthy"
     article_count: int = 0
     unread_count: int = 0
     categories: list[CategoryResponse] = []
+
+    @model_validator(mode="after")
+    def compute_health_status(self) -> "FeedResponse":
+        if self.fetch_failure_count >= 3:
+            self.health_status = "failing"
+        elif (
+            self.last_success_at is None
+            or self.last_success_at < datetime.now(timezone.utc) - timedelta(days=30)
+        ):
+            self.health_status = "stale"
+        else:
+            self.health_status = "healthy"
+        return self
 
 
 class FeedListResponse(BaseModel):
@@ -159,6 +183,14 @@ class ArticleReadUpdate(BaseModel):
 
 class ArticleBookmarkUpdate(BaseModel):
     is_bookmarked: bool
+
+
+class ArticleTagsUpdate(BaseModel):
+    tags: list[str]
+
+
+class UserTagsResponse(BaseModel):
+    tags: list[str]
 
 
 # ── Bulk article tag operations ───────────────────────────────────────────────
