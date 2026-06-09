@@ -17,11 +17,11 @@ _bearer = HTTPBearer(auto_error=False)
 
 # ── JWT ───────────────────────────────────────────────────────────────────────
 
-def create_access_token(user_id: int, email: str) -> tuple[str, int]:
+def create_access_token(user_id: int, email: str, token_version: int = 0) -> tuple[str, int]:
     """Returns (encoded_jwt, expires_in_seconds)."""
     expire_seconds = settings.jwt_expire_minutes * 60
     expire = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
-    payload = {"sub": str(user_id), "email": email, "exp": expire}
+    payload = {"sub": str(user_id), "email": email, "token_version": token_version, "exp": expire}
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expire_seconds
 
@@ -54,6 +54,13 @@ def get_current_user(
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    token_ver = payload.get("token_version", 0)
+    if token_ver != user.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked — please sign in again",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 

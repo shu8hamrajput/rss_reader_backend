@@ -46,6 +46,7 @@ class User(Base):
     # reader font, saved searches, ...) — keyed by top-level section, e.g.
     # {"settings": {...}, "layout": {...}, "saved_searches": [...]}
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default='0', default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
