@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Optional
 from pydantic import BaseModel, field_validator, ConfigDict
 
 
@@ -29,6 +30,11 @@ class TokenResponse(BaseModel):
 
 class PreferencesUpdate(BaseModel):
     preferences: dict
+
+
+class PreferencesResponse(BaseModel):
+    preferences: dict
+    updated_at: Optional[datetime] = None
 
 
 class GoogleTokenRequest(BaseModel):

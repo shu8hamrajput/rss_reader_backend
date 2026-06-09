@@ -5,6 +5,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import JSON
+from sqlalchemy import func
+from sqlalchemy import TIMESTAMP
 
 from .database import Base
 
@@ -205,6 +208,17 @@ class CollectionItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     collection: Mapped["Collection"] = relationship("Collection", back_populates="items")
+
+
+# ── User Preferences (separate table for per-user JSON blob) ──────────────────
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class CollectionSubscription(Base):

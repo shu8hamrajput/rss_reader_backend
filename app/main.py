@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import articles, auth, categories, collections, feeds, highlights, opml, payments, search, stream
+from .routers import articles, auth, categories, collections, feeds, highlights, opml, payments, preferences, search, stream
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -55,6 +55,13 @@ def _migrate() -> None:
             """UPDATE articles SET search_vector = to_tsvector('english',
                  coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
                WHERE search_vector IS NULL""",
+            # Per-user preferences table for cross-device settings sync
+            """CREATE TABLE IF NOT EXISTS user_preferences (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                 preferences JSONB NOT NULL DEFAULT '{}',
+                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+               )""",
         ]
         for stmt in stmts:
             try:
@@ -113,7 +120,8 @@ app.include_router(opml.router,       prefix="/api/v1")
 app.include_router(payments.router,   prefix="/api/v1")
 app.include_router(stream.router,     prefix="/api/v1")
 app.include_router(search.router,     prefix="/api/v1")
-app.include_router(collections.router, prefix="/api/v1")
+app.include_router(collections.router,  prefix="/api/v1")
+app.include_router(preferences.router,  prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")
