@@ -168,6 +168,14 @@ class ArticleBookmarkUpdate(BaseModel):
     is_bookmarked: bool
 
 
+class ArticleTagsUpdate(BaseModel):
+    tags: list[str]
+
+
+class UserTagsResponse(BaseModel):
+    tags: list[str]
+
+
 # ── Bulk article tag operations ───────────────────────────────────────────────
 
 class BulkTagRequest(BaseModel):
