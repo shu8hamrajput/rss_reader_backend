@@ -1,5 +1,6 @@
 import itertools
 import os
+from unittest.mock import AsyncMock, MagicMock
 
 import psycopg
 import pytest
@@ -176,3 +177,30 @@ def make_collection(db_session, owner, **kw) -> Collection:
     db_session.commit()
     db_session.refresh(collection)
     return collection
+
+
+# ── HTTP mocking helpers ─────────────────────────────────────────────────────
+
+def _response(json_data=None, raise_exc=None, text=None, headers=None, url="", status_code=200):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.raise_for_status.side_effect = raise_exc
+    if json_data is not None:
+        resp.json.return_value = json_data
+    if text is not None:
+        resp.text = text
+    resp.headers = headers or {}
+    resp.url = url
+    return resp
+
+
+class _FakeAsyncClient:
+    def __init__(self, get=None, head=None):
+        self.get = get if get is not None else AsyncMock()
+        self.head = head if head is not None else AsyncMock()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
