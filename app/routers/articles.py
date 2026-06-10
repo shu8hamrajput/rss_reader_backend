@@ -213,6 +213,33 @@ def get_reading_stats(
     )
 
 
+# System-managed tags that users should not overwrite via the tags endpoint
+_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
+
+
+@router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")
+def get_user_tags(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Returns the union of all non-system tags the user has applied across their articles."""
+    rows = (
+        db.query(Article.tags)
+        .join(Feed)
+        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
+        .all()
+    )
+    seen: set[str] = set()
+    for (raw,) in rows:
+        try:
+            for t in json.loads(raw or "[]"):
+                if t not in _SYSTEM_TAGS:
+                    seen.add(t)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return UserTagsResponse(tags=sorted(seen))
+
+
 @router.get("/{article_id}", response_model=ArticleResponse, summary="Get a single article")
 def get_article(
     article_id: int,
@@ -433,33 +460,6 @@ def bulk_mark_read(
             _remove_tag(article, "read")
     db.commit()
     return BulkActionResponse(updated=len(articles))
-
-
-# System-managed tags that users should not overwrite via the tags endpoint
-_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
-
-
-@router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")
-def get_user_tags(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Returns the union of all non-system tags the user has applied across their articles."""
-    rows = (
-        db.query(Article.tags)
-        .join(Feed)
-        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
-        .all()
-    )
-    seen: set[str] = set()
-    for (raw,) in rows:
-        try:
-            for t in json.loads(raw or "[]"):
-                if t not in _SYSTEM_TAGS:
-                    seen.add(t)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return UserTagsResponse(tags=sorted(seen))
 
 
 @router.patch("/{article_id}/tags", response_model=ArticleResponse, summary="Replace user-defined tags on an article")
