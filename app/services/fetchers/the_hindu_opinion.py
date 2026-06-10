@@ -7,7 +7,29 @@ extract the article body reliably. Falls back to the default scraper if none
 of the specific selectors match.
 """
 
+import httpx
+from bs4 import BeautifulSoup
+
 from ._default import fetch as default_fetch
+
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+
+_HINDU_SELECTORS = (
+    "[itemprop='articleBody']",
+    ".articlebodycontent",
+    ".article",
+)
+
+
+def _extract(html: str) -> str | None:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+        tag.decompose()
+    for selector in _HINDU_SELECTORS:
+        el = soup.select_one(selector)
+        if el and len(el.get_text(strip=True)) > 200:
+            return str(el)
+    return None
 
 
 async def fetch(url: str) -> str | None:
@@ -21,10 +43,3 @@ async def fetch(url: str) -> str | None:
         return await default_fetch(url)
     except Exception:
         return None
-
-if __name__ == "__main__":
-    import asyncio
-
-    url = "https://www.thehindu.com/opinion/editorial/india-and-the-quad/article67141419.ece"
-    content = asyncio.run(fetch(url))
-    print(content)
