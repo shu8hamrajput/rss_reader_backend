@@ -6,18 +6,266 @@ fetch/parse pipeline is driven via asyncio.run(). New-article counts are
 published to Redis so connected SSE clients still get live updates.
 """
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
+import re
+import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import httpx
+from sqlalchemy import text
 
 from .celery_app import celery_app
 from .database import SessionLocal
-from .models import Feed
+from .models import Article, ArticleRule, Feed, SearchAlert, UserWebhook
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
 
 logger = logging.getLogger(__name__)
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _tokenize(title: str) -> set[str]:
+    """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
+    return {t for t in re.findall(r'[a-z0-9]+', title.lower()) if len(t) >= 3}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _cluster_stories(db, articles: list[Article]) -> None:
+    """Assign story_cluster_id to new articles that share a topic with same-day articles.
+
+    Uses Jaccard similarity on title tokens. Articles with similarity >= 0.4
+    are grouped under the same UUID cluster. Already-clustered nearby articles
+    are pulled from DB to allow expansion of existing clusters.
+    """
+    if not articles:
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(hours=36)
+    nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
+        Article.published_at >= since,
+        Article.id.notin_([a.id for a in articles]),
+    ).all()
+
+    # Build lookup: {id: (title_tokens, cluster_id)}
+    existing: list[tuple[int, set[str], str | None]] = [
+        (row.id, _tokenize(row.title or ""), row.story_cluster_id)
+        for row in nearby_rows
+    ]
+
+    for article in articles:
+        tokens = _tokenize(article.title or "")
+        best_cluster: str | None = None
+        best_score = 0.39  # threshold
+
+        for _, etokens, ecluster in existing:
+            score = _jaccard(tokens, etokens)
+            if score > best_score:
+                best_score = score
+                best_cluster = ecluster
+
+        if best_cluster is None and best_score > 0.39:
+            best_cluster = str(uuid.uuid4())
+
+        if best_cluster:
+            article.story_cluster_id = best_cluster
+            # Also update the matched existing articles that don't have a cluster yet
+            existing = [
+                (eid, etokens, best_cluster if _jaccard(tokens, etokens) > 0.39 and not ecluster else ecluster)
+                for eid, etokens, ecluster in existing
+            ]
+        else:
+            article.story_cluster_id = None
+
+
+def _update_feed_velocity(db, feed: Feed, new_count: int) -> None:
+    """Update rolling 7-day articles/day average; mark noisy if it spikes > 3x avg."""
+    if feed.articles_per_day_avg is None:
+        feed.articles_per_day_avg = float(new_count)
+    else:
+        # Exponential moving average with ~7-day window (alpha = 2/8)
+        feed.articles_per_day_avg = 0.75 * feed.articles_per_day_avg + 0.25 * float(new_count)
+
+
+def _tag_list(article: Article) -> list[str]:
+    if not article.tags:
+        return []
+    try:
+        parsed = json.loads(article.tags)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _estimate_read_time(article: Article) -> int:
+    text = " ".join(filter(None, [
+        article.title or "",
+        article.summary or "",
+        article.content or "",
+        article.full_content or "",
+    ]))
+    return max(1, round(len(text.split()) / 200))
+
+
+def _condition_matches(article: Article, cond: dict) -> bool:
+    field = cond.get("field", "")
+    op = cond.get("op", "")
+    val = cond.get("value", "")
+    if field in ("title", "author", "content"):
+        if field == "title":
+            target = (article.title or "").lower()
+        elif field == "author":
+            target = (article.author or "").lower()
+        else:
+            target = " ".join(filter(None, [
+                article.title or "", article.summary or "",
+                article.content or "", article.full_content or "",
+            ])).lower()
+        v = str(val).lower()
+        if op == "contains":
+            return v in target
+        if op == "not_contains":
+            return v not in target
+    elif field == "feed_id":
+        try:
+            v_int = int(val)
+        except (TypeError, ValueError):
+            return False
+        if op == "eq":
+            return article.feed_id == v_int
+        if op == "neq":
+            return article.feed_id != v_int
+    elif field == "read_time_min":
+        rt = _estimate_read_time(article)
+        try:
+            v_int = int(val)
+        except (TypeError, ValueError):
+            return False
+        if op == "gt":
+            return rt > v_int
+        if op == "lt":
+            return rt < v_int
+        if op == "eq":
+            return rt == v_int
+        if op == "neq":
+            return rt != v_int
+    return False
+
+
+def _apply_rule_actions(article: Article, actions: list[dict]) -> None:
+    for action in actions:
+        atype = action.get("type")
+        val = action.get("value")
+        if atype == "add_tag":
+            tags = _tag_list(article)
+            tag_str = str(val).strip()
+            if tag_str and tag_str not in tags:
+                tags.append(tag_str)
+                article.tags = json.dumps(tags)
+        elif atype == "mark_read":
+            article.is_read = True
+            article.read_at = datetime.now(timezone.utc)
+        elif atype == "bookmark":
+            article.is_bookmarked = True
+        elif atype == "read_later":
+            tags = _tag_list(article)
+            if "saved_later" not in tags:
+                tags.append("saved_later")
+                article.tags = json.dumps(tags)
+
+
+def _apply_rules(db, user_id: int, articles: list[Article]) -> None:
+    if not articles:
+        return
+    rules = (
+        db.query(ArticleRule)
+        .filter(ArticleRule.user_id == user_id, ArticleRule.is_active == True)
+        .order_by(ArticleRule.order, ArticleRule.id)
+        .all()
+    )
+    if not rules:
+        return
+    for article in articles:
+        for rule in rules:
+            conditions = rule.conditions or []
+            if conditions and all(_condition_matches(article, c) for c in conditions):
+                _apply_rule_actions(article, rule.actions or [])
+                rule.match_count = (rule.match_count or 0) + 1
+
+
+def _match_alerts(db, feed_id: int, user_id: int, since: datetime) -> None:
+    """Check newly ingested articles against the user's search alerts and publish matches."""
+    alerts = db.query(SearchAlert).filter(SearchAlert.user_id == user_id).all()
+    if not alerts:
+        return
+    for alert in alerts:
+        try:
+            count = db.execute(
+                text("""
+                    SELECT count(*) FROM articles
+                    WHERE feed_id = :feed_id
+                      AND created_at >= :since
+                      AND search_vector @@ websearch_to_tsquery('english', :q)
+                """),
+                {"feed_id": feed_id, "since": since, "q": alert.query},
+            ).scalar() or 0
+            if count > 0:
+                alert.last_matched_at = datetime.now(timezone.utc)
+                publish(user_id, {
+                    "type": "search_alert",
+                    "alert_id": alert.id,
+                    "query": alert.query,
+                    "label": alert.label,
+                    "count": count,
+                    "feed_id": feed_id,
+                })
+                _fire_webhooks_sync(db, user_id, "alert_matched", {
+                    "alert_id": alert.id,
+                    "query": alert.query,
+                    "count": count,
+                    "feed_id": feed_id,
+                })
+        except Exception as exc:
+            logger.warning("Alert match failed for alert %d: %s", alert.id, exc)
+
+
+def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
+    """Deliver event payload to all active webhooks subscribed to this event type."""
+    webhooks = db.query(UserWebhook).filter(
+        UserWebhook.user_id == user_id,
+        UserWebhook.is_active == True,
+    ).all()
+    for wh in webhooks:
+        try:
+            events = json.loads(wh.events or "[]")
+        except Exception:
+            events = []
+        if event not in events:
+            continue
+        body = json.dumps({"event": event, "data": payload}).encode()
+        headers = {"Content-Type": "application/json", "X-RSS-Event": event}
+        if wh.secret:
+            sig = hmac.new(wh.secret.encode(), body, hashlib.sha256).hexdigest()
+            headers["X-RSS-Signature"] = f"sha256={sig}"
+        try:
+            # Fire-and-forget sync; failures are logged and do not block the task
+            import httpx as _httpx
+            _httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
+            wh.last_fired_at = datetime.now(timezone.utc)
+        except Exception as exc:
+            logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
+
+
+# ── Celery tasks ──────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -37,17 +285,31 @@ def refresh_all_feeds() -> None:
 
         for url, feed_group in url_groups.items():
             try:
+                before_refresh = datetime.now(timezone.utc)
                 results = asyncio.run(refresh_url_for_all_subscribers(feed_group, db))
                 now = datetime.now(timezone.utc)
                 for feed in feed_group:
                     feed.fetch_failure_count = 0
                     feed.last_success_at = now
                     new_count = results.get(feed.id, 0)
+                    _update_feed_velocity(db, feed, new_count)
                     if new_count > 0:
+                        # Cluster new articles for this feed
+                        new_articles = db.query(Article).filter(
+                            Article.feed_id == feed.id,
+                            Article.created_at >= before_refresh,
+                        ).all()
+                        _cluster_stories(db, new_articles)
+                        _apply_rules(db, feed.user_id, new_articles)
                         publish(
                             feed.user_id,
                             {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                         )
+                        _match_alerts(db, feed.id, feed.user_id, before_refresh)
+                        _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                            "feed_id": feed.id,
+                            "count": new_count,
+                        })
                 db.commit()
             except Exception as exc:
                 logger.warning("Failed to refresh URL %s: %s", url, exc)
@@ -67,16 +329,31 @@ def refresh_feed_by_id(feed_id: int) -> int:
         if not feed:
             return 0
         try:
+            before_refresh = datetime.now(timezone.utc)
             results = asyncio.run(refresh_url_for_all_subscribers([feed], db))
             feed.fetch_failure_count = 0
             feed.last_success_at = datetime.now(timezone.utc)
-            db.commit()
             new_count = results.get(feed.id, 0)
+            _update_feed_velocity(db, feed, new_count)
+            db.commit()
             if new_count > 0:
+                new_articles = db.query(Article).filter(
+                    Article.feed_id == feed.id,
+                    Article.created_at >= before_refresh,
+                ).all()
+                _cluster_stories(db, new_articles)
+                _apply_rules(db, feed.user_id, new_articles)
+                db.commit()
                 publish(
                     feed.user_id,
                     {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                 )
+                _match_alerts(db, feed.id, feed.user_id, before_refresh)
+                _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                    "feed_id": feed.id,
+                    "count": new_count,
+                })
+                db.commit()
             return new_count
         except Exception as exc:
             logger.warning("Failed to refresh feed %d: %s", feed_id, exc)

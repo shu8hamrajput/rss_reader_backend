@@ -3,7 +3,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -40,9 +40,22 @@ def _decode_token(token: str) -> dict:
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
+    # Accept X-API-Key header as an alternative to Bearer JWT
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        user = db.query(User).filter(User.api_token == api_key).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return user
+
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

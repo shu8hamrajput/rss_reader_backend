@@ -19,6 +19,39 @@ class UserResponse(BaseModel):
     # Synced client preferences (theme, layout, default view, reader font, saved
     # searches, ...) — opaque to the backend, merged shallowly on update
     preferences: dict | None = None
+    api_token: str | None = None
+
+
+class ApiTokenResponse(BaseModel):
+    api_token: str
+
+
+# ── Search Alert schemas ──────────────────────────────────────────────────────
+
+class SessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_info: str | None
+    ip_address: str | None
+    created_at: datetime
+    last_seen_at: datetime
+
+
+class SearchAlertCreate(BaseModel):
+    query: str
+    label: str | None = None
+
+
+class SearchAlertResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    query: str
+    label: str | None
+    created_at: datetime
+    last_matched_at: datetime | None = None
 
 
 class TokenResponse(BaseModel):
@@ -113,6 +146,8 @@ class FeedResponse(BaseModel):
     last_fetched_at: datetime | None
     fetch_failure_count: int = 0
     last_success_at: Optional[datetime] = None
+    health_snooze_until: Optional[datetime] = None
+    articles_per_day_avg: Optional[float] = None
     health_status: str = "healthy"
     article_count: int = 0
     unread_count: int = 0
@@ -120,16 +155,29 @@ class FeedResponse(BaseModel):
 
     @model_validator(mode="after")
     def compute_health_status(self) -> "FeedResponse":
+        now = datetime.now(timezone.utc)
+        if self.health_snooze_until and self.health_snooze_until > now:
+            self.health_status = "healthy"
+            return self
         if self.fetch_failure_count >= 3:
             self.health_status = "failing"
         elif (
             self.last_success_at is None
-            or self.last_success_at < datetime.now(timezone.utc) - timedelta(days=30)
+            or self.last_success_at < now - timedelta(days=30)
         ):
             self.health_status = "stale"
+        elif (
+            self.articles_per_day_avg is not None
+            and self.articles_per_day_avg > 50
+        ):
+            self.health_status = "noisy"
         else:
             self.health_status = "healthy"
         return self
+
+
+class FeedSnoozeRequest(BaseModel):
+    days: int = 30
 
 
 class FeedListResponse(BaseModel):
@@ -159,6 +207,12 @@ class ArticleResponse(BaseModel):
     media_type: str | None = None
     media_url: str | None = None
     duration_seconds: int | None = None
+    resume_at_seconds: int | None = None
+    episode_number: str | None = None
+    itunes_author: str | None = None
+    scroll_pct: int | None = None
+    story_cluster_id: str | None = None
+    article_note: str | None = None
     created_at: datetime
 
     @field_validator("tags", mode="before")
@@ -197,6 +251,14 @@ class ArticleTagsUpdate(BaseModel):
     tags: list[str]
 
 
+class ArticleResumeUpdate(BaseModel):
+    resume_at_seconds: int | None
+
+
+class ArticleScrollUpdate(BaseModel):
+    scroll_pct: int
+
+
 class UserTagsResponse(BaseModel):
     tags: list[str]
 
@@ -233,6 +295,8 @@ class HighlightCreate(BaseModel):
     start_pos: int
     end_pos: int
     color_id: int = 1
+    text: Optional[str] = None
+    note: Optional[str] = None
 
     @field_validator("end_pos")
     @classmethod
@@ -250,12 +314,13 @@ class HighlightCreate(BaseModel):
 
 
 class HighlightUpdate(BaseModel):
-    color_id: int
+    color_id: Optional[int] = None
+    note: Optional[str] = None
 
     @field_validator("color_id")
     @classmethod
-    def valid_color(cls, v: int) -> int:
-        if v not in (1, 2, 3, 4):
+    def valid_color(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v not in (1, 2, 3, 4):
             raise ValueError("color_id must be 1, 2, 3, or 4")
         return v
 
@@ -268,6 +333,25 @@ class HighlightResponse(BaseModel):
     start_pos: int
     end_pos: int
     color_id: int
+    text: Optional[str] = None
+    note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class HighlightReviewItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    article_id: int
+    article_title: str | None = None
+    article_url: str | None = None
+    start_pos: int
+    end_pos: int
+    color_id: int
+    text: Optional[str] = None
+    note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -439,3 +523,126 @@ class CollectionListResponse(BaseModel):
 class CollectionSubscribeResult(BaseModel):
     subscribed: bool
     feeds_added: int
+
+
+# ── Webhooks ──────────────────────────────────────────────────────────────────
+
+WEBHOOK_EVENTS = {"new_article", "highlight_created", "alert_matched"}
+
+
+class WebhookCreate(BaseModel):
+    url: str
+    events: list[str] = ["new_article"]
+    secret: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def url_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("url must not be empty")
+        return v
+
+    @field_validator("events")
+    @classmethod
+    def valid_events(cls, v: list[str]) -> list[str]:
+        invalid = set(v) - WEBHOOK_EVENTS
+        if invalid:
+            raise ValueError(f"Unknown event types: {invalid}")
+        return v
+
+
+class WebhookResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    url: str
+    events: list[str]
+    is_active: bool
+    created_at: datetime
+    last_fired_at: Optional[datetime] = None
+
+    @field_validator("events", mode="before")
+    @classmethod
+    def parse_events(cls, v) -> list[str]:
+        if isinstance(v, str):
+            import json as _json
+            try:
+                return _json.loads(v)
+            except Exception:
+                return []
+        return v or []
+
+
+# ── Article routing rule schemas ──────────────────────────────────────────────
+
+RULE_STRING_FIELDS = {"title", "author", "content"}
+RULE_NUM_FIELDS = {"feed_id", "read_time_min"}
+RULE_FIELDS = RULE_STRING_FIELDS | RULE_NUM_FIELDS
+RULE_STRING_OPS = {"contains", "not_contains"}
+RULE_NUM_OPS = {"eq", "neq", "gt", "lt"}
+RULE_ACTION_TYPES = {"add_tag", "mark_read", "bookmark", "read_later"}
+
+# feed_id is a label, not an ordered numeric value — restrict to identity checks only
+RULE_FIELD_OPS: dict[str, set[str]] = {
+    "title": RULE_STRING_OPS,
+    "author": RULE_STRING_OPS,
+    "content": RULE_STRING_OPS,
+    "feed_id": {"eq", "neq"},
+    "read_time_min": RULE_NUM_OPS,
+}
+
+
+class RuleCondition(BaseModel):
+    field: str
+    op: str
+    value: str | int | float
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> "RuleCondition":
+        if self.field not in RULE_FIELDS:
+            raise ValueError(f"Unknown field '{self.field}'. Valid: {sorted(RULE_FIELDS)}")
+        allowed_ops = RULE_FIELD_OPS[self.field]
+        if self.op not in allowed_ops:
+            raise ValueError(f"Op '{self.op}' not valid for field '{self.field}'")
+        return self
+
+
+class RuleAction(BaseModel):
+    type: str
+    value: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_action(self) -> "RuleAction":
+        if self.type not in RULE_ACTION_TYPES:
+            raise ValueError(f"Unknown action type '{self.type}'. Valid: {sorted(RULE_ACTION_TYPES)}")
+        if self.type == "add_tag" and not (self.value or "").strip():
+            raise ValueError("add_tag requires a non-empty value")
+        return self
+
+
+class RuleCreate(BaseModel):
+    name: str
+    conditions: list[RuleCondition]
+    actions: list[RuleAction]
+    is_active: bool = True
+
+
+class RuleUpdate(BaseModel):
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
+    conditions: Optional[list[RuleCondition]] = None
+    actions: Optional[list[RuleAction]] = None
+
+
+class RuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    is_active: bool
+    conditions: list[dict]
+    actions: list[dict]
+    match_count: int
+    order: int
+    created_at: datetime

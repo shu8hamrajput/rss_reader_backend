@@ -25,6 +25,7 @@ from ..models import User
 class PlanLimits:
     max_feeds: int | None
     daily_full_content_fetches: int | None
+    max_rules: int | None
 
 
 @dataclass(frozen=True)
@@ -37,8 +38,8 @@ class PlanPricing:
 DEFAULT_PLAN = "free"
 
 PLAN_LIMITS: dict[str, PlanLimits] = {
-    "free": PlanLimits(max_feeds=25, daily_full_content_fetches=20),
-    "paid": PlanLimits(max_feeds=None, daily_full_content_fetches=None),
+    "free": PlanLimits(max_feeds=25, daily_full_content_fetches=20, max_rules=3),
+    "paid": PlanLimits(max_feeds=None, daily_full_content_fetches=None, max_rules=None),
 }
 
 # Plans purchasable via Razorpay — keyed the same as PLAN_LIMITS.

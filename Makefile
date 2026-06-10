@@ -27,6 +27,10 @@ dev: ## Run dev server with auto-reload (port 8080)
 run: ## Run production server locally (no reload, single worker)
 	$(PYTHON) -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1
 
+.PHONY: test
+test: ## Run the test suite (requires Postgres + Redis running, e.g. `make up-d`)
+	$(PYTHON) -m pytest
+
 .PHONY: worker
 worker: ## Run a Celery worker (executes the periodic feed-refresh task)
 	$(PYTHON) -m celery -A app.celery_app worker --loglevel=info

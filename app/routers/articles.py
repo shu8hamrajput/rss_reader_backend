@@ -14,6 +14,8 @@ from ..schemas import (
     ArticleListResponse,
     ArticleReadUpdate,
     ArticleResponse,
+    ArticleResumeUpdate,
+    ArticleScrollUpdate,
     ArticleTagsUpdate,
     UserTagsResponse,
     BulkActionResponse,
@@ -25,8 +27,13 @@ from ..schemas import (
     ReadingStatsResponse,
     TopFeedStat,
 )
+from pydantic import BaseModel as _BaseModel
 from ..services.article_fetcher import fetch_full_content
 from ..services.usage import record_fetches, remaining_fetch_quota
+
+
+class _ArticleNotePayload(_BaseModel):
+    note: str | None = None
 
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
@@ -68,6 +75,7 @@ def list_articles(
     is_read: bool | None = Query(None, description="Filter by read status"),
     is_bookmarked: bool | None = Query(None, description="Filter by bookmark status"),
     tag: str | None = Query(None, description="Filter by tag (e.g. read_later, saved_later)"),
+    has_audio: bool | None = Query(None, description="Filter to audio/podcast episodes only"),
     search: str | None = Query(None, description="Full-text search (title + summary + content)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -94,6 +102,9 @@ def list_articles(
     if tag is not None:
         # JSON array contains the tag — simple LIKE match keeps this portable across SQLite/Postgres
         q = q.filter(Article.tags.like(f'%"{tag}"%'))
+
+    if has_audio:
+        q = q.filter(Article.media_type.like('audio/%'))
 
     if search:
         fts_article_ids = _fts_ids(search, db)
@@ -200,6 +211,33 @@ def get_reading_stats(
         daily_counts=daily_counts,
         top_feeds=top_feeds,
     )
+
+
+# System-managed tags that users should not overwrite via the tags endpoint
+_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
+
+
+@router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")
+def get_user_tags(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Returns the union of all non-system tags the user has applied across their articles."""
+    rows = (
+        db.query(Article.tags)
+        .join(Feed)
+        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
+        .all()
+    )
+    seen: set[str] = set()
+    for (raw,) in rows:
+        try:
+            for t in json.loads(raw or "[]"):
+                if t not in _SYSTEM_TAGS:
+                    seen.add(t)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return UserTagsResponse(tags=sorted(seen))
 
 
 @router.get("/{article_id}", response_model=ArticleResponse, summary="Get a single article")
@@ -424,33 +462,6 @@ def bulk_mark_read(
     return BulkActionResponse(updated=len(articles))
 
 
-# System-managed tags that users should not overwrite via the tags endpoint
-_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
-
-
-@router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")
-def get_user_tags(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Returns the union of all non-system tags the user has applied across their articles."""
-    rows = (
-        db.query(Article.tags)
-        .join(Feed)
-        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
-        .all()
-    )
-    seen: set[str] = set()
-    for (raw,) in rows:
-        try:
-            for t in json.loads(raw or "[]"):
-                if t not in _SYSTEM_TAGS:
-                    seen.add(t)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return UserTagsResponse(tags=sorted(seen))
-
-
 @router.patch("/{article_id}/tags", response_model=ArticleResponse, summary="Replace user-defined tags on an article")
 def update_article_tags(
     article_id: int,
@@ -465,6 +476,56 @@ def update_article_tags(
     # Reject obviously invalid tag values (no whitespace, max length)
     new_user_tags = [t.strip() for t in payload.tags if t.strip() and len(t.strip()) <= 64]
     _set_tags(article, existing_system + new_user_tags)
+    db.commit()
+    db.refresh(article)
+    return ArticleResponse.model_validate(article)
+
+
+@router.patch("/{article_id}/note", response_model=ArticleResponse, summary="Save article-level note")
+def update_article_note(
+    article_id: int,
+    payload: _ArticleNotePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    article = _owned_article(article_id, current_user, db)
+    article.article_note = payload.note.strip() if payload.note else None
+    db.commit()
+    db.refresh(article)
+    return ArticleResponse.model_validate(article)
+
+
+@router.patch(
+    "/{article_id}/resume",
+    response_model=ArticleResponse,
+    summary="Save playback resume position for a podcast episode",
+)
+def update_resume_position(
+    article_id: int,
+    payload: ArticleResumeUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    article = _owned_article(article_id, current_user, db)
+    article.resume_at_seconds = payload.resume_at_seconds
+    db.commit()
+    db.refresh(article)
+    return ArticleResponse.model_validate(article)
+
+
+@router.patch(
+    "/{article_id}/scroll",
+    response_model=ArticleResponse,
+    summary="Save reading scroll position (0-100%) for cross-device resume",
+)
+def update_scroll_position(
+    article_id: int,
+    payload: ArticleScrollUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    article = _owned_article(article_id, current_user, db)
+    article.scroll_pct = max(0, min(100, payload.scroll_pct))
     db.commit()
     db.refresh(article)
     return ArticleResponse.model_validate(article)

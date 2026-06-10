@@ -91,6 +91,7 @@ async def _apply_parsed_to_feed(
     }
 
     new_articles: list[Article] = []
+    transcript_urls: list[str | None] = []
     for entry in parsed.entries:
         guid = entry.get("id") or entry.get("link") or entry.get("title", "")
         if not guid or guid in existing_guids:
@@ -116,6 +117,32 @@ async def _apply_parsed_to_feed(
             except ValueError:
                 pass
 
+        # iTunes podcast metadata
+        episode_number = str(entry.get('itunes_episode', '') or '').strip() or None
+        itunes_author = (entry.get('itunes_author') or entry.get('author') or '').strip()[:256] or None
+        # Prefer itunes:image for cover art over generic thumbnail
+        itunes_image = entry.get('itunes_image', {})
+        if isinstance(itunes_image, dict):
+            itunes_image_url = itunes_image.get('href') or itunes_image.get('url')
+        else:
+            itunes_image_url = None
+
+        thumbnail = _get_thumbnail(entry) or itunes_image_url
+
+        # Podcast transcript URL (Podcasting 2.0 namespace + some RSS extensions)
+        transcript_url: str | None = None
+        for t in entry.get("podcast_transcript", []) or []:
+            if isinstance(t, dict):
+                url_val = t.get("url") or t.get("href")
+                if url_val:
+                    transcript_url = url_val
+                    break
+        if not transcript_url:
+            # Some feeds use a simple string or the transcript tag directly
+            raw_t = entry.get("podcast_transcript")
+            if isinstance(raw_t, str) and raw_t.startswith("http"):
+                transcript_url = raw_t
+
         article = Article(
             feed_id=feed.id,
             guid=guid,
@@ -124,23 +151,68 @@ async def _apply_parsed_to_feed(
             author=entry.get("author"),
             summary=entry.get("summary"),
             content=_get_content(entry),
-            thumbnail_url=_get_thumbnail(entry),
+            thumbnail_url=thumbnail,
             published_at=_parse_date(entry),
             media_type=media_type,
             media_url=media_url,
             duration_seconds=duration_seconds,
+            episode_number=episode_number,
+            itunes_author=itunes_author,
         )
         db.add(article)
         new_articles.append(article)
+        transcript_urls.append(transcript_url)
         existing_guids.add(guid)
 
-    # Flush to assign IDs before fetching full content
+    # Flush to assign IDs before fetching full content + transcripts
     if new_articles:
         db.flush()
         await _fetch_full_content_for_articles(new_articles)
+        await _fetch_transcripts_for_articles(new_articles, transcript_urls)
 
     feed.last_fetched_at = datetime.now(timezone.utc)
     return len(new_articles)
+
+
+async def _fetch_transcript(url: str) -> str | None:
+    """Fetch a podcast transcript (VTT/SRT/plain) and return its text content."""
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "RSSReader/1.0"})
+        resp.raise_for_status()
+        text = resp.text
+        # Strip VTT/SRT timing lines, leaving only spoken text
+        lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Skip WEBVTT header, cue identifiers, timestamps (00:00:00.000 --> ...)
+            if line in ("WEBVTT",) or "-->" in line or line.isdigit():
+                continue
+            lines.append(line)
+        return " ".join(lines)[:100_000] if lines else None
+    except Exception:
+        return None
+
+
+async def _fetch_transcripts_for_articles(articles: list[Article], urls: list[str | None]) -> None:
+    """For podcast articles with a transcript URL, fetch and store transcript as full_content."""
+    async def _fetch_one(article: Article, url: str) -> None:
+        if article.full_content:
+            return  # don't overwrite BeautifulSoup-fetched content
+        async with _FETCH_SEMAPHORE:
+            text = await _fetch_transcript(url)
+            if text:
+                article.full_content = text
+
+    tasks = [
+        _fetch_one(a, u)
+        for a, u in zip(articles, urls)
+        if u and a.media_type and a.media_type.startswith("audio/")
+    ]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 async def _fetch_full_content_for_articles(articles: list[Article]) -> None:
