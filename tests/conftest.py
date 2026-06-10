@@ -34,7 +34,7 @@ from app import database as db_module  # noqa: E402
 from app.auth import create_access_token  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import _migrate, app  # noqa: E402
-from app.models import Article, Category, Feed, User  # noqa: E402
+from app.models import Article, Category, Collection, Feed, User  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -113,6 +113,7 @@ def auth_headers_for(user: User) -> dict:
 _feed_seq = itertools.count(1)
 _article_seq = itertools.count(1)
 _category_seq = itertools.count(1)
+_collection_seq = itertools.count(1)
 
 
 def make_feed(db_session, user, **kw) -> Feed:
@@ -160,3 +161,18 @@ def make_category(db_session, user, **kw) -> Category:
     db_session.commit()
     db_session.refresh(category)
     return category
+
+
+def make_collection(db_session, owner, **kw) -> Collection:
+    n = next(_collection_seq)
+    defaults = dict(
+        owner_id=owner.id,
+        name=f"Collection {n}",
+        slug=f"collection-{n}",
+    )
+    defaults.update(kw)
+    collection = Collection(**defaults)
+    db_session.add(collection)
+    db_session.commit()
+    db_session.refresh(collection)
+    return collection
