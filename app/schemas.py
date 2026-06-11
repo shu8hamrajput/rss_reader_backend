@@ -54,6 +54,24 @@ class SearchAlertResponse(BaseModel):
     last_matched_at: datetime | None = None
 
 
+class AlertMatchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    alert_id: int
+    feed_id: int
+    article_ids: list[int]
+    count: int
+    matched_at: datetime
+
+    @field_validator("article_ids", mode="before")
+    @classmethod
+    def parse_article_ids(cls, v) -> list[int]:
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

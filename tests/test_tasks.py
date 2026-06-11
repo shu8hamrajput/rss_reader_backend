@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.models import ArticleRule, SearchAlert, UserWebhook
+from app.models import AlertMatch, ArticleRule, SearchAlert, UserWebhook
 from app.tasks import (
     _apply_rule_actions,
     _apply_rules,
@@ -218,7 +218,7 @@ def test_apply_rules_empty_conditions_not_applied(db_session, user):
 def test_match_alerts_publishes_and_fires_webhooks_on_match(db_session, user):
     feed = make_feed(db_session, user)
     since = datetime.now(timezone.utc) - timedelta(minutes=5)
-    make_article(
+    article = make_article(
         db_session, feed,
         title="Rust Async Programming Guide",
         summary="Learn rust async patterns",
@@ -239,6 +239,11 @@ def test_match_alerts_publishes_and_fires_webhooks_on_match(db_session, user):
     assert mock_fire.call_args[0][2] == "alert_matched"
 
     assert alert.last_matched_at is not None
+
+    match = db_session.query(AlertMatch).filter(AlertMatch.alert_id == alert.id).one()
+    assert match.feed_id == feed.id
+    assert match.count == 1
+    assert json.loads(match.article_ids) == [article.id]
 
 
 def test_match_alerts_no_match_does_nothing(db_session, user):

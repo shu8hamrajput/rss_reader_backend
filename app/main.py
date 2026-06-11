@@ -84,6 +84,16 @@ def _migrate() -> None:
                  UNIQUE(user_id, query)
                )""",
             "CREATE INDEX IF NOT EXISTS ix_search_alerts_user_id ON search_alerts (user_id)",
+            # Alert match history — articles that triggered a search alert, for digests
+            """CREATE TABLE IF NOT EXISTS alert_matches (
+                 id SERIAL PRIMARY KEY,
+                 alert_id INTEGER NOT NULL REFERENCES search_alerts(id) ON DELETE CASCADE,
+                 feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                 article_ids TEXT NOT NULL DEFAULT '[]',
+                 count INTEGER NOT NULL DEFAULT 0,
+                 matched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_alert_matches_alert_id ON alert_matches (alert_id)",
             # Podcast playback position — stores where the user left off for cross-device resume
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS resume_at_seconds INTEGER",
             # iTunes / podcast metadata fields

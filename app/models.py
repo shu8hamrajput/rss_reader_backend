@@ -291,6 +291,24 @@ class SearchAlert(Base):
     last_matched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="search_alerts")
+    matches: Mapped[list["AlertMatch"]] = relationship(
+        "AlertMatch", back_populates="alert", cascade="all, delete-orphan",
+        order_by="AlertMatch.matched_at.desc()",
+    )
+
+
+class AlertMatch(Base):
+    """A batch of articles that matched a search alert during one feed refresh."""
+    __tablename__ = "alert_matches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    alert_id: Mapped[int] = mapped_column(Integer, ForeignKey("search_alerts.id", ondelete="CASCADE"), nullable=False, index=True)
+    feed_id: Mapped[int] = mapped_column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=False)
+    article_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    alert: Mapped["SearchAlert"] = relationship("SearchAlert", back_populates="matches")
 
 
 # ── User Webhooks ─────────────────────────────────────────────────────────────

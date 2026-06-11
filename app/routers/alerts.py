@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import SearchAlert, User
-from ..schemas import SearchAlertCreate, SearchAlertResponse
+from ..models import AlertMatch, SearchAlert, User
+from ..schemas import AlertMatchResponse, SearchAlertCreate, SearchAlertResponse
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"])
 
@@ -50,3 +50,25 @@ def delete_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     db.delete(alert)
     db.commit()
+
+
+@router.get("/{alert_id}/matches", response_model=list[AlertMatchResponse], summary="List recent matches for a search alert")
+def list_alert_matches(
+    alert_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    alert = db.query(SearchAlert).filter(
+        SearchAlert.id == alert_id,
+        SearchAlert.user_id == current_user.id,
+    ).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return (
+        db.query(AlertMatch)
+        .filter(AlertMatch.alert_id == alert_id)
+        .order_by(AlertMatch.matched_at.desc())
+        .limit(limit)
+        .all()
+    )

@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from .celery_app import celery_app
 from .database import SessionLocal
-from .models import Article, ArticleRule, Feed, SearchAlert, UserWebhook
+from .models import AlertMatch, Article, ArticleRule, Feed, SearchAlert, UserWebhook
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
 
@@ -209,17 +209,27 @@ def _match_alerts(db, feed_id: int, user_id: int, since: datetime) -> None:
         return
     for alert in alerts:
         try:
-            count = db.execute(
-                text("""
-                    SELECT count(*) FROM articles
-                    WHERE feed_id = :feed_id
-                      AND created_at >= :since
-                      AND search_vector @@ websearch_to_tsquery('english', :q)
-                """),
-                {"feed_id": feed_id, "since": since, "q": alert.query},
-            ).scalar() or 0
+            article_ids = [
+                row[0]
+                for row in db.execute(
+                    text("""
+                        SELECT id FROM articles
+                        WHERE feed_id = :feed_id
+                          AND created_at >= :since
+                          AND search_vector @@ websearch_to_tsquery('english', :q)
+                    """),
+                    {"feed_id": feed_id, "since": since, "q": alert.query},
+                ).fetchall()
+            ]
+            count = len(article_ids)
             if count > 0:
                 alert.last_matched_at = datetime.now(timezone.utc)
+                db.add(AlertMatch(
+                    alert_id=alert.id,
+                    feed_id=feed_id,
+                    article_ids=json.dumps(article_ids),
+                    count=count,
+                ))
                 publish(user_id, {
                     "type": "search_alert",
                     "alert_id": alert.id,
