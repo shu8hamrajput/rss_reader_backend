@@ -28,53 +28,32 @@ _PING_INTERVAL = 25  # seconds
 
 
 async def _generate(request: Request, user_id: int):
-    async def inner():
-        stream = event_stream(user_id)
-        ping_task = asyncio.create_task(_ping_forever())
+    """Merge the user's Redis event stream with periodic keepalive pings."""
+    q: asyncio.Queue = asyncio.Queue()
 
-        try:
-            async for event in stream:
-                if await request.is_disconnected():
-                    break
-                yield {"data": json.dumps(event)}
-        finally:
-            ping_task.cancel()
+    async def _feed_events():
+        async for ev in event_stream(user_id):
+            await q.put(ev)
 
-    async def _ping_forever():
+    async def _pings():
         while True:
             await asyncio.sleep(_PING_INTERVAL)
-            # EventSourceResponse comment line keeps the connection alive
-            yield  # not used directly — we inject pings via a separate queue approach below
+            await q.put({"type": "ping"})
 
-    # Simpler: merge event stream with periodic pings
-    async def merged():
-        q = asyncio.Queue()
-
-        async def _feed_events():
-            async for ev in event_stream(user_id):
-                await q.put(ev)
-
-        async def _pings():
-            while True:
-                await asyncio.sleep(_PING_INTERVAL)
-                await q.put({"type": "ping"})
-
-        feed_task = asyncio.create_task(_feed_events())
-        ping_task = asyncio.create_task(_pings())
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=1.0)
-                    yield {"data": json.dumps(event)}
-                except asyncio.TimeoutError:
-                    continue
-        finally:
-            feed_task.cancel()
-            ping_task.cancel()
-
-    return merged()
+    feed_task = asyncio.create_task(_feed_events())
+    ping_task = asyncio.create_task(_pings())
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=1.0)
+                yield {"data": json.dumps(event)}
+            except asyncio.TimeoutError:
+                continue
+    finally:
+        feed_task.cancel()
+        ping_task.cancel()
 
 
 def _get_sse_user(
@@ -128,4 +107,4 @@ async def article_stream(
     db: Session = Depends(get_db),
 ):
     current_user = _get_sse_user(request, token, credentials, db)
-    return EventSourceResponse(await _generate(request, current_user.id))
+    return EventSourceResponse(_generate(request, current_user.id))
