@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, text
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Article, Feed, User
+from ..models import Article, Feed, ParserRequest, User
 from ..schemas import (
     ArticleBookmarkUpdate,
     ArticleListResponse,
@@ -17,6 +18,8 @@ from ..schemas import (
     ArticleResumeUpdate,
     ArticleScrollUpdate,
     ArticleTagsUpdate,
+    ParserRequestCreate,
+    ParserRequestResponse,
     UserTagsResponse,
     BulkActionResponse,
     BulkBookmarkRequest,
@@ -273,6 +276,49 @@ async def refetch_article_content(
         db.commit()
         db.refresh(article)
     return ArticleResponse.model_validate(article)
+
+
+@router.post(
+    "/{article_id}/request-parser",
+    response_model=ParserRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Request a better content extractor for this article's domain",
+)
+def request_parser(
+    article_id: int,
+    payload: ParserRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    article = _owned_article(article_id, current_user, db)
+    if not article.url:
+        raise HTTPException(status_code=422, detail="Article has no URL")
+
+    domain = urlparse(article.url).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    if not domain:
+        raise HTTPException(status_code=422, detail="Could not determine domain from article URL")
+
+    existing = db.query(ParserRequest).filter(
+        ParserRequest.user_id == current_user.id,
+        ParserRequest.domain == domain,
+        ParserRequest.status == "pending",
+    ).first()
+    if existing:
+        return existing
+
+    req = ParserRequest(
+        user_id=current_user.id,
+        article_id=article.id,
+        url=article.url,
+        domain=domain,
+        note=payload.note,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
 
 
 @router.patch("/{article_id}/read", response_model=ArticleResponse, summary="Mark read / unread")

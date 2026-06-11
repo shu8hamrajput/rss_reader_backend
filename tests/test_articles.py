@@ -308,6 +308,39 @@ def test_refetch_article_without_url_returns_422(client, db_session, user, auth_
     assert resp.status_code == 422
 
 
+def test_request_parser(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    article = make_article(db_session, feed, url="https://www.example.com/articles/foo")
+
+    resp = client.post(f"/api/v1/articles/{article.id}/request-parser", json={"note": "ads everywhere"}, headers=auth_headers)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["domain"] == "example.com"
+    assert body["status"] == "pending"
+    assert body["note"] == "ads everywhere"
+    assert body["article_id"] == article.id
+
+
+def test_request_parser_duplicate_pending_returns_existing(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    article = make_article(db_session, feed, url="https://example.com/articles/foo")
+    other_article = make_article(db_session, feed, url="https://example.com/articles/bar")
+
+    first = client.post(f"/api/v1/articles/{article.id}/request-parser", json={}, headers=auth_headers).json()
+    second = client.post(f"/api/v1/articles/{other_article.id}/request-parser", json={}, headers=auth_headers).json()
+
+    assert second["id"] == first["id"]
+
+
+def test_request_parser_without_url_returns_422(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    article = make_article(db_session, feed, url=None)
+
+    resp = client.post(f"/api/v1/articles/{article.id}/request-parser", json={}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
 def test_bulk_save_later(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
     article = make_article(db_session, feed, url="https://example.com/save-me")

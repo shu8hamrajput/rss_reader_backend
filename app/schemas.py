@@ -72,6 +72,24 @@ class AlertMatchResponse(BaseModel):
         return v
 
 
+class ParserRequestCreate(BaseModel):
+    note: str | None = None
+
+
+class ParserRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    article_id: int
+    url: str
+    domain: str
+    status: str
+    note: str | None
+    candidate_slug: str | None
+    created_at: datetime
+    processed_at: datetime | None = None
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

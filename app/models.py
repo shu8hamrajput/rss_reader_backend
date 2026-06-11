@@ -311,6 +311,29 @@ class AlertMatch(Base):
     alert: Mapped["SearchAlert"] = relationship("SearchAlert", back_populates="matches")
 
 
+# ── Parser requests ──────────────────────────────────────────────────────────
+
+class ParserRequest(Base):
+    """A user's request for a better content extractor for an article's domain.
+
+    Picked up by `python -m app.services.parser_gen process-requests`, which
+    generates/refines a candidate fetcher for the domain and marks matching
+    requests as processed.
+    """
+    __tablename__ = "parser_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    domain: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_slug: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # ── User Webhooks ─────────────────────────────────────────────────────────────
 
 class UserWebhook(Base):

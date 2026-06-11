@@ -53,6 +53,10 @@ improve-parser: ## Refine a candidate/active fetcher  →  make improve-parser S
 approve-parser: ## Promote a candidate to active  →  make approve-parser SLUG=example_com
 	$(PYTHON) -m app.services.parser_gen approve "$(SLUG)"
 
+.PHONY: process-parser-requests
+process-parser-requests: ## Generate/refine candidates from pending user "request better parser" submissions  →  make process-parser-requests [LLM=1] [SAMPLES=3]
+	$(PYTHON) -m app.services.parser_gen process-requests $(if $(LLM),--llm) $(if $(SAMPLES),--samples $(SAMPLES))
+
 # ── Docker Compose (Postgres + Redis + RabbitMQ + API + worker + beat) ───────
 
 .PHONY: up
