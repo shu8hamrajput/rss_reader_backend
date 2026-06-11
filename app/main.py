@@ -94,6 +94,21 @@ def _migrate() -> None:
                  matched_at TIMESTAMPTZ NOT NULL DEFAULT now()
                )""",
             "CREATE INDEX IF NOT EXISTS ix_alert_matches_alert_id ON alert_matches (alert_id)",
+            # User-requested parser improvements — picked up by `make process-parser-requests`
+            """CREATE TABLE IF NOT EXISTS parser_requests (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                 url VARCHAR(2048) NOT NULL,
+                 domain VARCHAR(256) NOT NULL,
+                 status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                 note TEXT,
+                 candidate_slug VARCHAR(256),
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 processed_at TIMESTAMPTZ
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_parser_requests_domain ON parser_requests (domain)",
+            "CREATE INDEX IF NOT EXISTS ix_parser_requests_status ON parser_requests (status)",
             # Podcast playback position — stores where the user left off for cross-device resume
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS resume_at_seconds INTEGER",
             # iTunes / podcast metadata fields
