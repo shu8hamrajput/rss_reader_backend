@@ -39,6 +39,20 @@ worker: ## Run a Celery worker (executes the periodic feed-refresh task)
 beat: ## Run Celery beat (schedules the periodic feed-refresh task every 30 min)
 	$(PYTHON) -m celery -A app.celery_app beat --loglevel=info
 
+# ── Parser generator (app.services.parser_gen) ────────────────────────────────
+
+.PHONY: gen-parser
+gen-parser: ## Generate a candidate fetcher  →  make gen-parser URL=https://example.com/feed [LLM=1] [SAMPLES=3]
+	$(PYTHON) -m app.services.parser_gen generate "$(URL)" $(if $(LLM),--llm) $(if $(SAMPLES),--samples $(SAMPLES))
+
+.PHONY: improve-parser
+improve-parser: ## Refine a candidate/active fetcher  →  make improve-parser SLUG=example_com [LLM=1] [FEEDBACK="..."] [URL=...]
+	$(PYTHON) -m app.services.parser_gen improvise "$(SLUG)" $(if $(LLM),--llm) $(if $(FEEDBACK),--feedback "$(FEEDBACK)") $(if $(URL),--url "$(URL)")
+
+.PHONY: approve-parser
+approve-parser: ## Promote a candidate to active  →  make approve-parser SLUG=example_com
+	$(PYTHON) -m app.services.parser_gen approve "$(SLUG)"
+
 # ── Docker Compose (Postgres + Redis + RabbitMQ + API + worker + beat) ───────
 
 .PHONY: up

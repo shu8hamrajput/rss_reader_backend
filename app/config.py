@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # Anthropic — LLM-assisted parser generation (app.services.parser_gen --llm)
+    anthropic_api_key: str = ""
+    parser_gen_model: str = "claude-sonnet-4-6"
+
     # App
     frontend_url: str = "http://localhost:3000"
 

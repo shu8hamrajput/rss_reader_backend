@@ -1,5 +1,6 @@
 import httpx
-from bs4 import BeautifulSoup
+
+from ._common import clean_soup, strip_and_select
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
 
@@ -15,16 +16,11 @@ _CONTENT_SELECTORS = (
 
 
 def extract_content(html: str) -> str | None:
-    soup = BeautifulSoup(html, "html.parser")
+    content = strip_and_select(html, _CONTENT_SELECTORS)
+    if content:
+        return content
 
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
-        tag.decompose()
-
-    for selector in _CONTENT_SELECTORS:
-        el = soup.select_one(selector)
-        if el and len(el.get_text(strip=True)) > 200:
-            return str(el)
-
+    soup = clean_soup(html)
     body = soup.find("body")
     return str(body) if body else None
 

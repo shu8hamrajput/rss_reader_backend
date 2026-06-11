@@ -22,3 +22,6 @@ celery[redis]>=5.4.0
 
 # Razorpay — checkout for plan upgrades
 razorpay>=1.4.0
+
+# LLM-assisted parser generation (app.services.parser_gen --llm)
+llama-index-llms-anthropic>=0.11.0
