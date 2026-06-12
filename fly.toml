@@ -11,8 +11,13 @@ primary_region = 'bom'
 [env]
   PORT = '8080'
   # DATABASE_URL, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND are set as
-  # secrets (see .env.example) — point them at managed Postgres/Redis/RabbitMQ,
-  # e.g. `fly postgres create`, Upstash Redis, CloudAMQP.
+  # secrets (see .env.example) — point them at managed Postgres/Redis,
+  # e.g. `fly postgres create` or Neon, and a single Upstash Redis instance
+  # (db0/db1/db2 for cache, Celery result backend, and Celery broker).
+
+[processes]
+  app = 'uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1'
+  worker = 'celery -A app.celery_app worker -B --loglevel=info --concurrency=2'
 
 [http_service]
   internal_port = 8080
@@ -20,6 +25,7 @@ primary_region = 'bom'
   auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
+  processes = ['app']
 
   [[http_service.checks]]
     interval = '30s'
@@ -29,6 +35,14 @@ primary_region = 'bom'
     path = '/health'
 
 [[vm]]
+  processes = ['app']
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
+
+[[vm]]
+  processes = ['worker']
   memory = '256mb'
   cpu_kind = 'shared'
   cpus = 1
