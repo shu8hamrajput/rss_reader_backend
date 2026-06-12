@@ -473,6 +473,65 @@ def test_sniff_feed_type_none_for_unrelated_content():
     assert _sniff_feed_type("<html><body>hello</body></html>") is None
 
 
+def test_search_feeds_youtube_missing_credentials(client, monkeypatch):
+    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+
+    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+    assert resp.status_code == 503
+
+
+def test_search_feeds_youtube_success(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    data = {
+        "items": [
+            {
+                "id": {"channelId": "UC123"},
+                "snippet": {
+                    "title": "Example Channel",
+                    "description": "Desc",
+                    "thumbnails": {"high": {"url": "https://example.com/thumb.jpg"}},
+                },
+            },
+            {"id": {}, "snippet": {"title": "No Channel Id"}},
+        ],
+    }
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
+
+    with _patch_client(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 1
+    assert results[0]["feed_url"] == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123"
+    assert results[0]["title"] == "Example Channel"
+    assert results[0]["cover_url"] == "https://example.com/thumb.jpg"
+    assert results[0]["website_url"] == "https://www.youtube.com/channel/UC123"
+
+
+def test_search_feeds_youtube_http_status_error(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    error_response = MagicMock(status_code=500)
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
+        raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
+    )))
+
+    with _patch_client(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 502
+
+
+def test_search_feeds_youtube_request_error(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
+
+    with _patch_client(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 502
+
+
 def test_discover_feeds_falls_back_to_common_path_probing(client):
     html = "<html><head></head><body>no feed links here</body></html>"
     page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
