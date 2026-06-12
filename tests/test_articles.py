@@ -63,11 +63,12 @@ def test_list_articles_tag_filter(client, db_session, user, auth_headers):
 def test_list_articles_has_audio_filter(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
     audio = make_article(db_session, feed, media_type="audio/mpeg")
+    youtube = make_article(db_session, feed, media_type="video/youtube")
     make_article(db_session, feed)
 
     resp = client.get("/api/v1/articles", params={"has_audio": True}, headers=auth_headers)
-    ids = [a["id"] for a in resp.json()["items"]]
-    assert ids == [audio.id]
+    ids = {a["id"] for a in resp.json()["items"]}
+    assert ids == {audio.id, youtube.id}
 
 
 def test_list_articles_search(client, db_session, user, auth_headers):

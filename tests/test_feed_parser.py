@@ -204,6 +204,56 @@ def test_apply_parsed_to_feed_fetches_transcript_only_for_audio_without_full_con
     mock_transcript.assert_called_once_with("https://e.com/d.vtt")
 
 
+def test_apply_parsed_to_feed_marks_youtube_channel_entries_as_playable(db_session, user):
+    feed = make_feed(db_session, user, url="https://www.youtube.com/feeds/videos.xml?channel_id=UC123")
+    parsed = feedparser.FeedParserDict({
+        "feed": feedparser.FeedParserDict({"title": "Some Channel"}),
+        "entries": [
+            {
+                "id": "yt:video:abc123", "title": "Episode 1",
+                "link": "https://www.youtube.com/watch?v=abc123",
+                "summary": "s1", "author": "Some Channel",
+                "media_thumbnail": [{"url": "https://i.ytimg.com/vi/abc123/hqdefault.jpg"}],
+            },
+            {
+                "id": "yt:video:short1", "title": "Short 1",
+                "link": "https://www.youtube.com/shorts/short1",
+                "summary": "s2", "author": "Some Channel",
+            },
+        ],
+    })
+
+    with patch("app.services.feed_parser.fetch_full_content", new=AsyncMock(return_value=None)):
+        asyncio.run(_apply_parsed_to_feed(feed, parsed, None, None, db_session))
+    db_session.commit()
+
+    articles = {a.guid: a for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert articles["yt:video:abc123"].media_type == "video/youtube"
+    assert articles["yt:video:abc123"].media_url == "https://www.youtube.com/watch?v=abc123"
+    assert articles["yt:video:abc123"].thumbnail_url == "https://i.ytimg.com/vi/abc123/hqdefault.jpg"
+    assert articles["yt:video:abc123"].itunes_author == "Some Channel"
+    assert articles["yt:video:short1"].media_type == "video/youtube"
+    assert articles["yt:video:short1"].media_url == "https://www.youtube.com/shorts/short1"
+
+
+def test_apply_parsed_to_feed_non_youtube_feed_unaffected(db_session, user):
+    feed = make_feed(db_session, user)  # default non-YouTube url
+    parsed = feedparser.FeedParserDict({
+        "feed": feedparser.FeedParserDict({"title": "Feed"}),
+        "entries": [
+            {"id": "plain", "title": "Plain article", "link": "https://example.com/a", "summary": "s"},
+        ],
+    })
+
+    with patch("app.services.feed_parser.fetch_full_content", new=AsyncMock(return_value=None)):
+        asyncio.run(_apply_parsed_to_feed(feed, parsed, None, None, db_session))
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "plain").one()
+    assert article.media_type is None
+    assert article.media_url is None
+
+
 # ── _parse_date ───────────────────────────────────────────────────────────────
 
 def test_parse_date_with_published_parsed():

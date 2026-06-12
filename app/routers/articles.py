@@ -107,7 +107,7 @@ def list_articles(
         q = q.filter(Article.tags.like(f'%"{tag}"%'))
 
     if has_audio:
-        q = q.filter(Article.media_type.like('audio/%'))
+        q = q.filter(or_(Article.media_type.like('audio/%'), Article.media_type == 'video/youtube'))
 
     if search:
         fts_article_ids = _fts_ids(search, db)
