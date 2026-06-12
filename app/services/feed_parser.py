@@ -104,6 +104,12 @@ async def _apply_parsed_to_feed(
             media_type = enc.get('type')
             media_url = enc.get('href') or enc.get('url')
 
+        # YouTube channel Atom feeds use <media:group> instead of <enclosure> —
+        # mark entries as playable "podcast" episodes via the embedded player.
+        if media_type is None and "youtube.com/feeds/videos.xml" in feed.url:
+            media_type = "video/youtube"
+            media_url = entry.get("link")
+
         raw_dur = entry.get('itunes_duration')
         if raw_dur and isinstance(raw_dur, str):
             parts = raw_dur.split(':')
