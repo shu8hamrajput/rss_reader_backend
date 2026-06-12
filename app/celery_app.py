@@ -1,8 +1,12 @@
 """
-Celery application — RabbitMQ broker, Redis result backend.
+Celery application — Redis broker, Redis result backend.
 
 Run a worker with:   celery -A app.celery_app worker --loglevel=info
 Run the beat with:   celery -A app.celery_app beat --loglevel=info
+
+Pass -B to the worker (celery -A app.celery_app worker -B) to run the beat
+scheduler embedded in the worker process — used in production to cover both
+roles with a single Fly machine.
 """
 from celery import Celery
 

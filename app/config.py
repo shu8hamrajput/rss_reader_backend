@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # Redis — caching, rate limiting, SSE pub/sub, and Celery result backend
     redis_url: str = "redis://localhost:6379/0"
 
-    # Celery — RabbitMQ broker, Redis result backend
-    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
+    # Celery — Redis broker (db2) + Redis result backend (db1)
+    celery_broker_url: str = "redis://localhost:6379/2"
     celery_result_backend: str = "redis://localhost:6379/1"
 
     # Razorpay — checkout for plan upgrades; create keys at https://dashboard.razorpay.com/app/keys
