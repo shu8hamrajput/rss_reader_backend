@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import alerts, articles, auth, categories, collections, export, feeds, highlights, opml, payments, preferences, rules, search, stream, webhooks
+from .routers import alerts, articles, auth, categories, collections, export, feature_votes, feeds, highlights, opml, payments, preferences, rules, search, stream, webhooks
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -165,6 +165,15 @@ def _migrate() -> None:
             "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS note TEXT",
             # Article-level note — user's freeform annotation for the whole article
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS article_note TEXT",
+            # Feature votes — roadmap voting from the logged-out LoginPage
+            """CREATE TABLE IF NOT EXISTS feature_votes (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 feature_key VARCHAR(64) NOT NULL,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 UNIQUE(user_id, feature_key)
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_feature_votes_user_id ON feature_votes (user_id)",
         ]
         for stmt in stmts:
             try:
@@ -229,6 +238,7 @@ app.include_router(alerts.router,       prefix="/api/v1")
 app.include_router(webhooks.router,     prefix="/api/v1")
 app.include_router(rules.router,        prefix="/api/v1")
 app.include_router(export.router,       prefix="/api/v1")
+app.include_router(feature_votes.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

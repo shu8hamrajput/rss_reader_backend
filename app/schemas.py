@@ -682,3 +682,33 @@ class RuleResponse(BaseModel):
     match_count: int
     order: int
     created_at: datetime
+
+
+# ── Feature vote schemas ──────────────────────────────────────────────────────
+
+VALID_FEATURE_KEYS = frozenset({
+    "highlight_notes",
+    "search_alerts",
+    "email_digest",
+    "readwise_sync",
+    "personal_api_token",
+})
+
+
+class FeatureVoteCreate(BaseModel):
+    feature_key: str
+
+    @field_validator("feature_key")
+    @classmethod
+    def valid_feature_key(cls, v: str) -> str:
+        if v not in VALID_FEATURE_KEYS:
+            raise ValueError("unknown feature_key")
+        return v
+
+
+class FeatureVoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    feature_key: str
+    created_at: datetime
