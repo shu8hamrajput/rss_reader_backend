@@ -369,3 +369,15 @@ class ArticleRule(Base):
     match_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ── Feature votes ─────────────────────────────────────────────────────────────
+
+class FeatureVote(Base):
+    __tablename__ = "feature_votes"
+    __table_args__ = (UniqueConstraint("user_id", "feature_key", name="uq_feature_vote_user_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    feature_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
