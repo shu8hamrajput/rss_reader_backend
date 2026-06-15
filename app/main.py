@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import alerts, articles, auth, categories, collections, export, feature_votes, feeds, highlights, opml, payments, preferences, rules, search, stream, webhooks
+from .routers import alerts, articles, auth, categories, collections, export, feature_votes, feeds, fetchers, highlights, opml, payments, preferences, rules, search, stream, webhooks
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -174,6 +174,21 @@ def _migrate() -> None:
                  UNIQUE(user_id, feature_key)
                )""",
             "CREATE INDEX IF NOT EXISTS ix_feature_votes_user_id ON feature_votes (user_id)",
+            # Self-healing feeds — parser_gen fetcher candidates generated from Feed Health
+            """CREATE TABLE IF NOT EXISTS generated_candidates (
+                 id SERIAL PRIMARY KEY,
+                 feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                 domain VARCHAR(256) NOT NULL,
+                 slug VARCHAR(256) NOT NULL,
+                 status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                 mode VARCHAR(16),
+                 error TEXT,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 completed_at TIMESTAMPTZ
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_feed_id ON generated_candidates (feed_id)",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_domain ON generated_candidates (domain)",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_status ON generated_candidates (status)",
         ]
         for stmt in stmts:
             try:
@@ -239,6 +254,7 @@ app.include_router(webhooks.router,     prefix="/api/v1")
 app.include_router(rules.router,        prefix="/api/v1")
 app.include_router(export.router,       prefix="/api/v1")
 app.include_router(feature_votes.router, prefix="/api/v1")
+app.include_router(fetchers.router,      prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

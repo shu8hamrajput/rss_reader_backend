@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     parser_gen_model: str = "claude-sonnet-4-6"
 
+    # Admin — comma-separated emails allowed to trigger self-healing-feed
+    # fetcher generation/approval (app.routers.fetchers)
+    admin_emails: str = ""
+
     # App
     frontend_url: str = "http://localhost:3000"
 

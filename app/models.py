@@ -334,6 +334,28 @@ class ParserRequest(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# ── Generated fetcher candidates (self-healing feeds) ───────────────────────────
+
+class GeneratedCandidate(Base):
+    """A job ticket for a parser_gen-generated fetcher candidate for a feed's domain.
+
+    Proposal content (selectors, reasoning, before/after char counts) is not
+    duplicated here — it's read on demand from the candidate `.py` file via
+    `codegen.load_module_attrs()`.
+    """
+    __tablename__ = "generated_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    feed_id: Mapped[int] = mapped_column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=False, index=True)
+    domain: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)  # pending|ready|approved|failed
+    mode: Mapped[str | None] = mapped_column(String(16), nullable=True)  # heuristic|llm
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # ── User Webhooks ─────────────────────────────────────────────────────────────
 
 class UserWebhook(Base):

@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from pydantic import BaseModel, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, computed_field, field_validator, model_validator, ConfigDict
+
+from .auth import admin_emails
 
 
 # ── Auth / User schemas ───────────────────────────────────────────────────────
@@ -20,6 +22,11 @@ class UserResponse(BaseModel):
     # searches, ...) — opaque to the backend, merged shallowly on update
     preferences: dict | None = None
     api_token: str | None = None
+
+    @computed_field
+    @property
+    def is_admin(self) -> bool:
+        return self.email.lower() in admin_emails()
 
 
 class ApiTokenResponse(BaseModel):
@@ -88,6 +95,39 @@ class ParserRequestResponse(BaseModel):
     candidate_slug: str | None
     created_at: datetime
     processed_at: datetime | None = None
+
+
+class GenerateFetcherRequest(BaseModel):
+    use_llm: bool = False
+
+
+class CandidateDetail(BaseModel):
+    domain: str
+    slug: str
+    mode: str | None
+    reasoning: str
+    content_selectors: tuple[str, ...]
+    noise_selectors: tuple[str, ...]
+    sample_urls: list[str]
+    generated_at: str
+    iteration: int
+    before_chars: dict[str, int]
+    after_chars: dict[str, int]
+
+
+class GeneratedCandidateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    feed_id: int
+    domain: str
+    slug: str
+    status: str
+    mode: str | None
+    error: str | None
+    created_at: datetime
+    completed_at: datetime | None = None
+    candidate: CandidateDetail | None = None
 
 
 class TokenResponse(BaseModel):
