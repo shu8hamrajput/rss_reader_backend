@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Annotated
 
+import defusedxml.ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,8 @@ from ..schemas import OPMLImportResult
 from ..services.feed_parser import refresh_feed
 
 router = APIRouter(prefix="/opml", tags=["OPML"])
+
+_MAX_OPML_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
@@ -52,10 +56,12 @@ async def import_opml(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    raw = await file.read()
+    raw = await file.read(_MAX_OPML_SIZE + 1)
+    if len(raw) > _MAX_OPML_SIZE:
+        raise HTTPException(status_code=413, detail="OPML file too large (max 5 MB)")
     try:
-        root = ET.fromstring(raw.decode("utf-8", errors="replace"))
-    except ET.ParseError as exc:
+        root = DefusedET.fromstring(raw.decode("utf-8", errors="replace"))
+    except (ET.ParseError, DefusedXmlException) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid XML: {exc}")
 
     body = root.find("body")

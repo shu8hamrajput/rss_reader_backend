@@ -10,6 +10,7 @@ python-jose[cryptography]>=3.3.0
 pydantic-settings>=2.0.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
+defusedxml>=0.7.1
 sse-starlette>=2.1.0
 slowapi>=0.1.9
 googlenewsdecoder>=0.1.7

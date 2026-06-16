@@ -95,6 +95,13 @@ def test_refresh_feed_inserts_only_new_articles(db_session, user):
     assert guids == {"existing-guid", "new-guid"}
 
 
+def test_refresh_feed_rejects_private_address(db_session, user):
+    feed = make_feed(db_session, user, url="http://169.254.169.254/latest/meta-data")
+
+    with pytest.raises(ValueError):
+        asyncio.run(refresh_feed(feed, db_session))
+
+
 def test_refresh_feed_propagates_http_errors(db_session, user):
     feed = make_feed(db_session, user)
     error_resp = MagicMock(status_code=500)

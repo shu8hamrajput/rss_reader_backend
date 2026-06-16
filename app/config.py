@@ -42,5 +42,20 @@ class Settings(BaseSettings):
     # App
     frontend_url: str = "http://localhost:3000"
 
+    # CORS — comma-separated list of allowed origins
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+
+_INSECURE_JWT_SECRET = "change-me-in-production-use-a-long-random-string"
+
+
+def _validate(s: "Settings") -> None:
+    if s.jwt_secret_key == _INSECURE_JWT_SECRET:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is still the default placeholder — set a unique "
+            "secret (see .env.example)."
+        )
+
 
 settings = Settings()
+_validate(settings)

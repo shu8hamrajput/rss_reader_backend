@@ -23,6 +23,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+
+from ..services.url_safety import assert_public_url
 from fastapi import APIRouter, HTTPException, Query
 
 from ..schemas import (
@@ -337,6 +339,11 @@ async def discover_feeds(
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    try:
+        assert_public_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=_HEADERS) as client:
         try:

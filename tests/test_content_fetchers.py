@@ -1,4 +1,10 @@
-from app.services.fetchers._default import extract_content
+import asyncio
+
+from app.services.fetchers._default import extract_content, fetch
+
+
+def test_fetch_rejects_private_address():
+    assert asyncio.run(fetch("http://127.0.0.1/admin")) is None
 
 
 def test_extract_content_from_article_tag():
