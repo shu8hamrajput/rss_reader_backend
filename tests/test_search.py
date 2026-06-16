@@ -123,6 +123,11 @@ def test_discover_feeds_invalid_scheme_returns_422(client):
     assert resp.status_code == 422
 
 
+def test_discover_feeds_rejects_private_address(client):
+    resp = client.get("/api/v1/search/discover", params={"url": "http://169.254.169.254/latest/meta-data"})
+    assert resp.status_code == 422
+
+
 def test_search_feeds_feedly_skips_results_without_feed_id(client):
     data = {
         "results": [

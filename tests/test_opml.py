@@ -77,6 +77,23 @@ def test_import_opml_missing_body(client, auth_headers):
     assert resp.status_code == 422
 
 
+def test_import_opml_blocks_xxe(client, auth_headers):
+    body = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE opml [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+        '<opml version="1.0"><head><title>&xxe;</title></head><body/></opml>'
+    )
+    resp = _upload(client, auth_headers, body=body)
+    assert resp.status_code == 422
+
+
+def test_import_opml_rejects_oversized_file(client, auth_headers):
+    padding = " " * (5 * 1024 * 1024 + 1)
+    body = f"<?xml version=\"1.0\"?><opml version=\"1.0\"><!--{padding}--><body/></opml>"
+    resp = _upload(client, auth_headers, body=body)
+    assert resp.status_code == 413
+
+
 def test_export_opml(client, db_session, user, auth_headers):
     cat = make_category(db_session, user, name="News")
     categorized = make_feed(db_session, user, title="Categorized Feed", url="https://example.com/cat.xml")
