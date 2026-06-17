@@ -19,10 +19,12 @@ import httpx
 from sqlalchemy import text
 
 from .celery_app import celery_app
+from .config import settings
 from .database import SessionLocal
-from .models import AlertMatch, Article, ArticleRule, Feed, SearchAlert, UserWebhook
+from .models import AlertMatch, Article, ArticleRule, Feed, GeneratedCandidate, SearchAlert, UserWebhook
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
+from .services.fetchers._common import strip_and_select
 
 logger = logging.getLogger(__name__)
 
@@ -370,5 +372,94 @@ def refresh_feed_by_id(feed_id: int) -> int:
             feed.fetch_failure_count += 1
             db.commit()
             return 0
+    finally:
+        db.close()
+
+
+def _generate_candidate(db, candidate: "GeneratedCandidate", url: str, use_llm: bool, samples_n: int = 3) -> None:
+    """Generate (or refine) a parser_gen fetcher candidate for *candidate*'s domain.
+
+    Shared by the `generate_fetcher_candidate` Celery task and tests, which pass
+    in their own session.
+    """
+    from .services.parser_gen import codegen
+    from .services.parser_gen import samples as pg_samples
+    from .services.parser_gen.__main__ import _gather_samples, _propose
+    from .services.parser_gen.proposal import SelectorProposal
+
+    try:
+        article_urls, _ = pg_samples.sample_article_urls(url, samples_n)
+        fetched = _gather_samples(article_urls)
+        if not fetched:
+            raise RuntimeError("could not fetch any sample pages")
+
+        existing_path = codegen.candidate_path(candidate.slug)
+        if not existing_path.exists():
+            existing_path = codegen.active_path(candidate.slug)
+
+        current = None
+        iteration = 1
+        pattern = codegen.domain_pattern(candidate.domain)
+        before_selectors: tuple = ()
+        before_noise: tuple = ()
+        if existing_path.exists():
+            attrs = codegen.load_module_attrs(existing_path)
+            current = SelectorProposal(
+                content_selectors=list(attrs["content_selectors"]),
+                noise_selectors=list(attrs["noise_selectors"]),
+                reasoning=attrs["meta"].get("reasoning", ""),
+            )
+            iteration = int(attrs["meta"].get("iteration", 1)) + 1
+            pattern = attrs["domain_pattern"] or pattern
+            before_selectors = attrs["content_selectors"]
+            before_noise = attrs["noise_selectors"]
+
+        html_samples = [html for _, html in fetched]
+        proposal = _propose(html_samples, use_llm, current=current)
+
+        before_chars: dict[str, int] = {}
+        after_chars: dict[str, int] = {}
+        for sample_url, html in fetched:
+            before = strip_and_select(html, before_selectors, before_noise) if before_selectors else None
+            after = strip_and_select(html, tuple(proposal.content_selectors), tuple(proposal.noise_selectors))
+            before_chars[sample_url] = len(before) if before else 0
+            after_chars[sample_url] = len(after) if after else 0
+
+        meta = {
+            "domain": candidate.domain,
+            "feed_url": url,
+            "sample_urls": [u for u, _ in fetched],
+            "mode": "llm" if use_llm else "heuristic",
+            "model": settings.parser_gen_model if use_llm else None,
+            "reasoning": proposal.reasoning,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "iteration": iteration,
+            "before_chars": before_chars,
+            "after_chars": after_chars,
+        }
+        source = codegen.render_module(proposal, meta, pattern)
+        codegen.write_candidate(candidate.slug, source)
+
+        candidate.status = "ready"
+        candidate.mode = meta["mode"]
+        candidate.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:
+        candidate.status = "failed"
+        candidate.error = str(exc)[:500]
+        candidate.completed_at = datetime.now(timezone.utc)
+        db.commit()
+
+
+@celery_app.task(name="app.tasks.generate_fetcher_candidate")
+def generate_fetcher_candidate(candidate_id: int, url: str, use_llm: bool, samples_n: int = 3) -> None:
+    """Sync task — parser_gen's samples/heuristics/llm helpers are sync, and an
+    LLM call can take 10-30s which would block the Uvicorn worker if run inline."""
+    db = SessionLocal()
+    try:
+        candidate = db.query(GeneratedCandidate).filter(GeneratedCandidate.id == candidate_id).first()
+        if not candidate:
+            return
+        _generate_candidate(db, candidate, url, use_llm, samples_n)
     finally:
         db.close()

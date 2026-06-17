@@ -11,6 +11,8 @@ Supported search indexes:
   itunes        Apple Podcasts / iTunes — mainstream podcasts. No key.
   gpodder       gpodder.net — community podcast directory. No key.
   fyyd          fyyd.de — European podcast directory. No key.
+  youtube       YouTube channels, returned as their video RSS feed. Free key required:
+                  set YOUTUBE_API_KEY in env (YouTube Data API v3).
 """
 import hashlib
 import os
@@ -21,6 +23,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+
+from ..services.url_safety import assert_public_url
 from fastapi import APIRouter, HTTPException, Query
 
 from ..schemas import (
@@ -34,7 +38,7 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 _HEADERS = {"User-Agent": "RSSReader/1.0 (+https://github.com)"}
 
-SearchSource = Literal["feedly", "podcast_index", "itunes", "gpodder", "fyyd"]
+SearchSource = Literal["feedly", "podcast_index", "itunes", "gpodder", "fyyd", "youtube"]
 
 # ── Per-source fetch helpers ──────────────────────────────────────────────────
 
@@ -218,6 +222,54 @@ async def _search_fyyd(q: str, limit: int) -> FeedSearchResponse:
     return FeedSearchResponse(query=q, results=results)
 
 
+async def _search_youtube(q: str, limit: int) -> FeedSearchResponse:
+    api_key = os.getenv("YOUTUBE_API_KEY", "")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="YouTube search requires a YOUTUBE_API_KEY env var. "
+                   "Get a free key (YouTube Data API v3) at console.cloud.google.com",
+        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={
+                    "part": "snippet",
+                    "type": "channel",
+                    "q": q,
+                    "maxResults": min(limit, 50),
+                    "key": api_key,
+                },
+                headers=_HEADERS,
+            )
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"YouTube error: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"YouTube unreachable: {exc}")
+
+    data = resp.json()
+    results = []
+    for item in data.get("items", []):
+        channel_id = item.get("id", {}).get("channelId")
+        if not channel_id:
+            continue
+        snippet = item.get("snippet", {})
+        thumbnails = snippet.get("thumbnails", {})
+        results.append(FeedSearchResult(
+            feed_url=f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+            title=snippet.get("title"),
+            description=snippet.get("description"),
+            website_url=f"https://www.youtube.com/channel/{channel_id}",
+            subscribers=None,
+            language=None,
+            cover_url=(thumbnails.get("high") or thumbnails.get("default") or {}).get("url"),
+            velocity=None,
+        ))
+    return FeedSearchResponse(query=q, results=results)
+
+
 # ── Feed search endpoint ──────────────────────────────────────────────────────
 
 @router.get(
@@ -227,7 +279,8 @@ async def _search_fyyd(q: str, limit: int) -> FeedSearchResponse:
     description=(
         "Search for RSS/Atom/podcast feeds using the selected index. "
         "`source` defaults to `feedly` (general RSS). "
-        "Use `podcast_index`, `itunes`, `gpodder`, or `fyyd` for podcast-focused results."
+        "Use `podcast_index`, `itunes`, `gpodder`, or `fyyd` for podcast-focused results, "
+        "or `youtube` to find a channel's video feed by name."
     ),
 )
 async def search_feeds(
@@ -246,6 +299,8 @@ async def search_feeds(
         return await _search_gpodder(q, limit)
     if source == "fyyd":
         return await _search_fyyd(q, limit)
+    if source == "youtube":
+        return await _search_youtube(q, limit)
 
 
 # ── Website feed discovery ────────────────────────────────────────────────────
@@ -284,6 +339,11 @@ async def discover_feeds(
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    try:
+        assert_public_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=_HEADERS) as client:
         try:

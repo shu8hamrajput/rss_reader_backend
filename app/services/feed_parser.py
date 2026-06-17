@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Article, Feed
 from .article_fetcher import fetch_full_content
+from .url_safety import assert_public_url
 
 _FETCH_SEMAPHORE = asyncio.Semaphore(5)
 
@@ -51,6 +52,7 @@ async def _http_fetch(
     etag: str | None,
     last_modified: str | None,
 ) -> tuple[httpx.Response, bool]:
+    assert_public_url(url)
     headers: dict[str, str] = {"User-Agent": "RSSReader/1.0"}
     if etag:
         headers["If-None-Match"] = etag
@@ -103,6 +105,12 @@ async def _apply_parsed_to_feed(
             enc = enclosures[0]
             media_type = enc.get('type')
             media_url = enc.get('href') or enc.get('url')
+
+        # YouTube channel Atom feeds use <media:group> instead of <enclosure> —
+        # mark entries as playable "podcast" episodes via the embedded player.
+        if media_type is None and "youtube.com/feeds/videos.xml" in feed.url:
+            media_type = "video/youtube"
+            media_url = entry.get("link")
 
         raw_dur = entry.get('itunes_duration')
         if raw_dur and isinstance(raw_dur, str):
@@ -177,6 +185,7 @@ async def _apply_parsed_to_feed(
 async def _fetch_transcript(url: str) -> str | None:
     """Fetch a podcast transcript (VTT/SRT/plain) and return its text content."""
     try:
+        assert_public_url(url)
         async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
             resp = await client.get(url, headers={"User-Agent": "RSSReader/1.0"})
         resp.raise_for_status()

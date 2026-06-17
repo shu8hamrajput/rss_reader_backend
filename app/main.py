@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import alerts, articles, auth, categories, collections, export, feeds, highlights, opml, payments, preferences, rules, search, stream, webhooks
+from .routers import alerts, articles, auth, categories, collections, export, feature_votes, feeds, fetchers, highlights, opml, payments, preferences, rules, search, stream, webhooks
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -165,6 +165,30 @@ def _migrate() -> None:
             "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS note TEXT",
             # Article-level note — user's freeform annotation for the whole article
             "ALTER TABLE articles ADD COLUMN IF NOT EXISTS article_note TEXT",
+            # Feature votes — roadmap voting from the logged-out LoginPage
+            """CREATE TABLE IF NOT EXISTS feature_votes (
+                 id SERIAL PRIMARY KEY,
+                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                 feature_key VARCHAR(64) NOT NULL,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 UNIQUE(user_id, feature_key)
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_feature_votes_user_id ON feature_votes (user_id)",
+            # Self-healing feeds — parser_gen fetcher candidates generated from Feed Health
+            """CREATE TABLE IF NOT EXISTS generated_candidates (
+                 id SERIAL PRIMARY KEY,
+                 feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                 domain VARCHAR(256) NOT NULL,
+                 slug VARCHAR(256) NOT NULL,
+                 status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                 mode VARCHAR(16),
+                 error TEXT,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 completed_at TIMESTAMPTZ
+               )""",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_feed_id ON generated_candidates (feed_id)",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_domain ON generated_candidates (domain)",
+            "CREATE INDEX IF NOT EXISTS ix_generated_candidates_status ON generated_candidates (status)",
         ]
         for stmt in stmts:
             try:
@@ -209,7 +233,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -229,6 +253,8 @@ app.include_router(alerts.router,       prefix="/api/v1")
 app.include_router(webhooks.router,     prefix="/api/v1")
 app.include_router(rules.router,        prefix="/api/v1")
 app.include_router(export.router,       prefix="/api/v1")
+app.include_router(feature_votes.router, prefix="/api/v1")
+app.include_router(fetchers.router,      prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")

@@ -77,6 +77,16 @@ def get_current_user(
     return user
 
 
+def admin_emails() -> set[str]:
+    return {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.email.lower() not in admin_emails():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user
+
+
 # ── OAuth state (CSRF protection) ─────────────────────────────────────────────
 
 def generate_oauth_state() -> str:
