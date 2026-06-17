@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, engine
-from .routers import alerts, articles, auth, categories, collections, export, feature_votes, feeds, fetchers, highlights, opml, payments, preferences, rules, search, stream, webhooks
+from .routers import alerts, articles, auth, briefings, categories, collections, export, feature_votes, feeds, fetchers, highlights, opml, payments, preferences, rules, search, stream, webhooks
 
 # ── Rate limiter (IP-based; Redis-backed so limits are shared across workers) ─
 limiter = Limiter(
@@ -257,6 +257,7 @@ app.include_router(rules.router,        prefix="/api/v1")
 app.include_router(export.router,       prefix="/api/v1")
 app.include_router(feature_votes.router, prefix="/api/v1")
 app.include_router(fetchers.router,      prefix="/api/v1")
+app.include_router(briefings.router,     prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"], summary="Health check")
