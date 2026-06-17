@@ -411,6 +411,7 @@ class HighlightResponse(BaseModel):
     color_id: int
     text: Optional[str] = None
     note: Optional[str] = None
+    ai_question: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     created_at: datetime
 
@@ -427,6 +428,7 @@ class HighlightReviewItem(BaseModel):
     color_id: int
     text: Optional[str] = None
     note: Optional[str] = None
+    ai_question: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     created_at: datetime
 

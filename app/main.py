@@ -189,6 +189,8 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_generated_candidates_feed_id ON generated_candidates (feed_id)",
             "CREATE INDEX IF NOT EXISTS ix_generated_candidates_domain ON generated_candidates (domain)",
             "CREATE INDEX IF NOT EXISTS ix_generated_candidates_status ON generated_candidates (status)",
+            # AI-generated Anki question for highlights
+            "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS ai_question TEXT",
         ]
         for stmt in stmts:
             try:

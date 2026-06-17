@@ -26,3 +26,5 @@ razorpay>=1.4.0
 
 # LLM-assisted parser generation (app.services.parser_gen --llm)
 llama-index-llms-anthropic>=0.11.0
+# Direct Anthropic SDK — AI question generation for Anki export
+anthropic>=0.40.0

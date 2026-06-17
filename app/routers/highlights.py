@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
+from ..config import settings
 from ..database import get_db
 from ..models import Article, Feed, Highlight, User
 from ..schemas import HighlightCreate, HighlightResponse, HighlightReviewItem, HighlightUpdate
@@ -173,6 +174,7 @@ def get_review_queue(
             color_id=h.color_id,
             text=h.text,
             note=h.note,
+            ai_question=h.ai_question,
             reviewed_at=h.reviewed_at,
             created_at=h.created_at,
         ))
@@ -231,4 +233,81 @@ def export_highlights(
     return JSONResponse(
         content=export,
         headers={"Content-Disposition": "attachment; filename=highlights.json"},
+    )
+
+
+@router.post(
+    "/highlights/{highlight_id}/generate-question",
+    response_model=HighlightResponse,
+    summary="Generate an Anki question for a highlight using AI",
+)
+async def generate_anki_question(
+    highlight_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    h = _owned_highlight(highlight_id, current_user, db)
+    if not h.text:
+        raise HTTPException(status_code=400, detail="Highlight has no text")
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=503, detail="AI question generation not configured")
+
+    article = db.query(Article).filter(Article.id == h.article_id).first()
+    article_title = article.title if article else "Unknown article"
+
+    from anthropic import Anthropic
+    client = Anthropic(api_key=settings.anthropic_api_key)
+    message = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=128,
+        system=(
+            "You generate Anki flashcard questions. Given a highlighted passage from an article, "
+            "produce exactly one clear question whose answer is that passage. "
+            "Test conceptual understanding, not just recall. Return only the question text."
+        ),
+        messages=[{
+            "role": "user",
+            "content": f'Article: "{article_title}"\n\nHighlighted passage:\n"{h.text}"',
+        }],
+    )
+    h.ai_question = message.content[0].text.strip()
+    db.commit()
+    db.refresh(h)
+    return h
+
+
+@router.get(
+    "/highlights/export/anki",
+    summary="Export highlights as an Anki-importable tab-separated file",
+    description=(
+        "Returns a .txt file in Anki's Basic note type tab-separated format. "
+        "Highlights with an ai_question use it as the front; others use the note field or are skipped."
+    ),
+)
+def export_highlights_anki(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (
+        db.query(Highlight, Article)
+        .join(Article, Highlight.article_id == Article.id)
+        .filter(Highlight.user_id == current_user.id)
+        .order_by(Highlight.created_at.asc())
+        .all()
+    )
+    lines = ["#separator:tab", "#html:false", "#notetype:Basic", "#columns:Front\tBack\tTags"]
+    for h, a in rows:
+        front = h.ai_question or h.note
+        if not front or not h.text:
+            continue
+        tag = (a.title or "").replace(" ", "_").replace("\t", " ")[:40]
+        back = h.text.replace("\t", " ").replace("\n", " ")
+        front_clean = front.replace("\t", " ").replace("\n", " ")
+        lines.append(f"{front_clean}\t{back}\t{tag}")
+
+    content = "\n".join(lines)
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=highlights_anki.txt"},
     )
