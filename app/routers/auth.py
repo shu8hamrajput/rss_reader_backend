@@ -211,6 +211,21 @@ async def google_token_exchange(request: Request, payload: GoogleTokenRequest, d
     return _build_token_response(user)
 
 
+# ── Token refresh ─────────────────────────────────────────────────────────────
+
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="Issue a fresh JWT without re-authenticating with Google",
+    description=(
+        "Call with a still-valid Bearer JWT to receive a new token with a reset expiry. "
+        "Use this to silently extend sessions on page load or before making long background requests."
+    ),
+)
+def refresh_token(current_user: User = Depends(get_current_user)):
+    return _build_token_response(current_user)
+
+
 # ── Current user ──────────────────────────────────────────────────────────────
 
 @router.get(
