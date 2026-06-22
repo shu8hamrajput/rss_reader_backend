@@ -124,28 +124,27 @@ def list_articles(
             term = f"%{search}%"
             q = q.filter(or_(Article.title.ilike(term), Article.summary.ilike(term)))
 
-    total = q.count()
-    items = (
+    # Use a window function to get the total count and the page rows in ONE query
+    # instead of two separate round-trips (q.count() + q.all()).
+    # full_content / search_vector are deferred: full_content is MB of fetched HTML
+    # irrelevant for list/card rendering; search_vector is a binary tsvector that is
+    # never serialised. The reader falls back to `content` (the RSS body) when
+    # full_content is None; users can trigger a refetch from the reader toolbar.
+    count_col = func.count().over().label("_total")
+    q_paged = (
         q
-        # Defer large columns not needed for list/card view.
-        # full_content can be MB of fetched HTML — skipping it here drops per-request
-        # memory from ~60 MB to ~1-2 MB on a page of 30 articles.
-        # search_vector is a binary tsvector never serialised in API responses.
-        # The reader falls back to `content` (RSS feed text) when full_content is None;
-        # users who need the fetched version can trigger a refetch from the reader.
-        .options(
-            defer(Article.full_content),
-            defer(Article.search_vector),
-        )
+        .options(defer(Article.full_content), defer(Article.search_vector))
         .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
+        .add_columns(count_col)
         .offset((page - 1) * page_size)
         .limit(page_size)
-        .all()
     )
+    rows = q_paged.all()
+    total = rows[0]._total if rows else 0
+    items = [ArticleResponse.model_validate(row.Article) for row in rows]
 
     return ArticleListResponse(
-        total=total, page=page, page_size=page_size,
-        items=[ArticleResponse.model_validate(a) for a in items],
+        total=total, page=page, page_size=page_size, items=items,
     )
 
 
@@ -154,69 +153,97 @@ def get_reading_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    base = db.query(Article).join(Feed).filter(Feed.user_id == current_user.id)
-
-    total_articles = base.count()
-    total_read = base.filter(Article.is_read == True).count()
-    total_bookmarked = base.filter(Article.is_bookmarked == True).count()
-
     now = datetime.now(timezone.utc)
     today = now.date()
     today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
-    week_start = today_start - timedelta(days=6)
-
-    read_today = base.filter(Article.read_at >= today_start).count()
-    read_this_week = base.filter(Article.read_at >= week_start).count()
-
-    # Daily read counts for the last 30 days
+    week_start  = today_start - timedelta(days=6)
     window_start = today_start - timedelta(days=29)
-    daily_rows = (
-        base.filter(Article.read_at >= window_start)
-        .with_entities(func.date(Article.read_at).label("d"), func.count(Article.id))
-        .group_by("d")
-        .all()
-    )
-    counts_by_date = {row[0].isoformat(): row[1] for row in daily_rows}
+
+    # Single query for all aggregate counters — replaces 5 separate COUNT round-trips.
+    agg = db.execute(
+        text("""
+            SELECT
+              COUNT(*)                                                   AS total_articles,
+              COUNT(*) FILTER (WHERE a.is_read = true)                  AS total_read,
+              COUNT(*) FILTER (WHERE a.is_bookmarked = true)            AS total_bookmarked,
+              COUNT(*) FILTER (WHERE a.read_at >= :today_start)         AS read_today,
+              COUNT(*) FILTER (WHERE a.read_at >= :week_start)          AS read_this_week
+            FROM articles a
+            JOIN feeds f ON a.feed_id = f.id
+            WHERE f.user_id = :uid
+        """),
+        {"uid": current_user.id, "today_start": today_start, "week_start": week_start},
+    ).fetchone()
+
+    total_articles  = int(agg.total_articles)
+    total_read      = int(agg.total_read)
+    total_bookmarked = int(agg.total_bookmarked)
+    read_today      = int(agg.read_today)
+    read_this_week  = int(agg.read_this_week)
+
+    # Daily read counts for the past 30 days — single GROUP BY query.
+    daily_rows = db.execute(
+        text("""
+            SELECT DATE(a.read_at AT TIME ZONE 'UTC') AS d, COUNT(*) AS n
+            FROM articles a
+            JOIN feeds f ON a.feed_id = f.id
+            WHERE f.user_id = :uid AND a.read_at >= :window_start
+            GROUP BY d
+        """),
+        {"uid": current_user.id, "window_start": window_start},
+    ).fetchall()
+    counts_by_date: dict[str, int] = {str(r.d): int(r.n) for r in daily_rows}
     daily_counts = [
-        DailyReadCount(date=d.isoformat(), count=counts_by_date.get(d.isoformat(), 0))
-        for d in (window_start.date() + timedelta(days=i) for i in range(30))
+        DailyReadCount(
+            date=(window_start.date() + timedelta(days=i)).isoformat(),
+            count=counts_by_date.get((window_start.date() + timedelta(days=i)).isoformat(), 0),
+        )
+        for i in range(30)
     ]
 
-    # Streaks: derived from the distinct set of days with at least one read article
-    read_dates = sorted(
-        {row[0] for row in base.filter(Article.read_at.isnot(None))
-            .with_entities(func.date(Article.read_at)).distinct().all()}
-    )
+    # Distinct read-dates for streak calculation — fetch only the date column.
+    streak_rows = db.execute(
+        text("""
+            SELECT DISTINCT DATE(a.read_at AT TIME ZONE 'UTC') AS d
+            FROM articles a
+            JOIN feeds f ON a.feed_id = f.id
+            WHERE f.user_id = :uid AND a.read_at IS NOT NULL
+            ORDER BY d
+        """),
+        {"uid": current_user.id},
+    ).fetchall()
+    read_dates = [r.d for r in streak_rows]  # list[datetime.date], already sorted
+
     current_streak = 0
     longest_streak = 0
     if read_dates:
-        run = 1
-        longest_streak = 1
+        run = longest_streak = 1
         for prev, curr in zip(read_dates, read_dates[1:]):
-            if curr - prev == timedelta(days=1):
-                run += 1
-            else:
-                run = 1
+            run = run + 1 if (curr - prev).days == 1 else 1
             longest_streak = max(longest_streak, run)
-
-        last_date = read_dates[-1]
-        if last_date in (today, today - timedelta(days=1)):
+        last = read_dates[-1]
+        if last in (today, today - timedelta(days=1)):
             current_streak = 1
             for i in range(len(read_dates) - 1, 0, -1):
-                if read_dates[i] - read_dates[i - 1] == timedelta(days=1):
+                if (read_dates[i] - read_dates[i - 1]).days == 1:
                     current_streak += 1
                 else:
                     break
 
-    top_feed_rows = (
-        base.filter(Article.is_read == True)
-        .with_entities(Feed.id, Feed.title, func.count(Article.id).label("c"))
-        .group_by(Feed.id, Feed.title)
-        .order_by(func.count(Article.id).desc())
-        .limit(5)
-        .all()
-    )
-    top_feeds = [TopFeedStat(feed_id=row[0], title=row[1], read_count=row[2]) for row in top_feed_rows]
+    # Top 5 feeds by read count — one GROUP BY query.
+    top_feed_rows = db.execute(
+        text("""
+            SELECT f.id, f.title, COUNT(*) AS c
+            FROM articles a
+            JOIN feeds f ON a.feed_id = f.id
+            WHERE f.user_id = :uid AND a.is_read = true
+            GROUP BY f.id, f.title
+            ORDER BY c DESC
+            LIMIT 5
+        """),
+        {"uid": current_user.id},
+    ).fetchall()
+    top_feeds = [TopFeedStat(feed_id=r.id, title=r.title, read_count=int(r.c)) for r in top_feed_rows]
 
     return ReadingStatsResponse(
         total_articles=total_articles,
@@ -241,22 +268,27 @@ def get_user_tags(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Returns the union of all non-system tags the user has applied across their articles."""
-    rows = (
-        db.query(Article.tags)
-        .join(Feed)
-        .filter(Feed.user_id == current_user.id, Article.tags.isnot(None))
-        .all()
-    )
-    seen: set[str] = set()
-    for (raw,) in rows:
-        try:
-            for t in json.loads(raw or "[]"):
-                if t not in _SYSTEM_TAGS:
-                    seen.add(t)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return UserTagsResponse(tags=sorted(seen))
+    """Returns the union of all non-system tags the user has applied across their articles.
+
+    Uses jsonb_array_elements_text to flatten and deduplicate tags entirely in SQL,
+    avoiding loading every article's tag JSON into Python for client-side union.
+    """
+    system_tags = list(_SYSTEM_TAGS)
+    rows = db.execute(
+        text("""
+            SELECT DISTINCT tag
+            FROM   articles a
+            JOIN   feeds f ON a.feed_id = f.id,
+                   jsonb_array_elements_text(a.tags::jsonb) AS tag
+            WHERE  f.user_id = :uid
+              AND  a.tags IS NOT NULL
+              AND  a.tags != 'null'
+              AND  tag != ALL(:system_tags)
+            ORDER  BY tag
+        """),
+        {"uid": current_user.id, "system_tags": system_tags},
+    ).fetchall()
+    return UserTagsResponse(tags=[r.tag for r in rows])
 
 
 @router.get("/{article_id}", response_model=ArticleResponse, summary="Get a single article")
@@ -413,10 +445,17 @@ def _remove_tag(article: Article, tag: str) -> None:
 
 
 def _owned_articles(article_ids: list[int], user: User, db: Session) -> list[Article]:
+    # Bulk mutation endpoints (mark-read, bookmark, tag) only touch metadata columns.
+    # Defer the large content fields to avoid loading MB of HTML for no reason.
     return (
         db.query(Article)
         .join(Feed)
         .filter(Article.id.in_(article_ids), Feed.user_id == user.id)
+        .options(
+            defer(Article.full_content),
+            defer(Article.content),
+            defer(Article.search_vector),
+        )
         .all()
     )
 
