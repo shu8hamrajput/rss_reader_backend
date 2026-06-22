@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -53,17 +53,22 @@ def _owned_article(article_id: int, user: User, db: Session) -> Article:
     return article
 
 
+_FTS_ID_LIMIT = 500  # max article IDs pulled into Python for an IN() filter
+
 def _fts_ids(search: str, db: Session) -> list[int] | None:
-    """Return article IDs matching the Postgres full-text query, ranked by relevance,
-    or None if the search_vector index is unavailable (fall back to ILIKE)."""
+    """Return up to _FTS_ID_LIMIT article IDs matching the Postgres FTS query, ranked by
+    relevance. Returns None when the search_vector index is unavailable so the caller
+    can fall back to ILIKE. Capping at 500 prevents loading thousands of IDs into the
+    Python heap for broad search terms."""
     try:
         rows = db.execute(
             text(
                 """SELECT id FROM articles
                    WHERE search_vector @@ plainto_tsquery('english', :q)
-                   ORDER BY ts_rank(search_vector, plainto_tsquery('english', :q)) DESC"""
+                   ORDER BY ts_rank(search_vector, plainto_tsquery('english', :q)) DESC
+                   LIMIT :lim"""
             ),
-            {"q": search},
+            {"q": search, "lim": _FTS_ID_LIMIT},
         ).fetchall()
         return [r[0] for r in rows]
     except Exception:
@@ -121,7 +126,18 @@ def list_articles(
 
     total = q.count()
     items = (
-        q.order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
+        q
+        # Defer large columns not needed for list/card view.
+        # full_content can be MB of fetched HTML — skipping it here drops per-request
+        # memory from ~60 MB to ~1-2 MB on a page of 30 articles.
+        # search_vector is a binary tsvector never serialised in API responses.
+        # The reader falls back to `content` (RSS feed text) when full_content is None;
+        # users who need the fetched version can trigger a refetch from the reader.
+        .options(
+            defer(Article.full_content),
+            defer(Article.search_vector),
+        )
+        .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
