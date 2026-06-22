@@ -385,6 +385,7 @@ def list_sessions(
         db.query(UserSession)
         .filter(UserSession.user_id == current_user.id)
         .order_by(UserSession.last_seen_at.desc())
+        .limit(50)
         .all()
     )
 

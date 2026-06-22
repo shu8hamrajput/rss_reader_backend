@@ -115,6 +115,7 @@ def list_my_collections(
         db.query(Collection)
         .filter(Collection.owner_id == current_user.id)
         .order_by(Collection.created_at.desc())
+        .limit(200)
         .all()
     )
     return [_build_response(c, current_user, db) for c in collections]
@@ -130,6 +131,7 @@ def list_subscribed_collections(
         .join(CollectionSubscription, CollectionSubscription.collection_id == Collection.id)
         .filter(CollectionSubscription.user_id == current_user.id)
         .order_by(CollectionSubscription.subscribed_at.desc())
+        .limit(200)
         .all()
     )
     return [_build_response(c, current_user, db) for c in collections]

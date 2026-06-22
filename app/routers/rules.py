@@ -19,6 +19,7 @@ def list_rules(
         db.query(ArticleRule)
         .filter(ArticleRule.user_id == current_user.id)
         .order_by(ArticleRule.order, ArticleRule.id)
+        .limit(200)
         .all()
     )
 

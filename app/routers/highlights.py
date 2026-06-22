@@ -48,6 +48,7 @@ def list_highlights(
         db.query(Highlight)
         .filter(Highlight.article_id == article_id, Highlight.user_id == current_user.id)
         .order_by(Highlight.start_pos)
+        .limit(500)
         .all()
     )
 

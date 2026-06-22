@@ -137,6 +137,7 @@ def list_feeds_health(
         .filter(Feed.user_id == current_user.id)
         .options(selectinload(Feed.categories))
         .order_by(Feed.fetch_failure_count.desc(), Feed.last_success_at.asc().nullsfirst())
+        .limit(500)
         .all()
     )
     return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
@@ -158,7 +159,7 @@ def list_feeds(
         q = q.filter(Feed.is_active == True)
     if category_id is not None:
         q = q.filter(Feed.categories.any(id=category_id))
-    feeds = q.order_by(Feed.created_at.desc()).all()
+    feeds = q.order_by(Feed.created_at.desc()).limit(500).all()
     return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
 
 
