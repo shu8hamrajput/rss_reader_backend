@@ -38,6 +38,66 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 _HEADERS = {"User-Agent": "RSSReader/1.0 (+https://github.com)"}
 
+# ── YouTube helpers (no API key required) ─────────────────────────────────────
+
+_YT_CHANNEL_RE = re.compile(
+    r"youtube\.com/(?:channel/|(c/|user/|@))([\w@.-]+)", re.IGNORECASE
+)
+
+def _yt_rss_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+def _extract_channel_id_from_html(html: str) -> str | None:
+    """Pluck the channelId from the embedded JSON blobs YouTube inlines in every page."""
+    # YouTube embeds data in several places; try each in order of reliability.
+    for pattern in [
+        r'"channelId"\s*:\s*"(UC[\w-]{22})"',
+        r'"externalChannelId"\s*:\s*"(UC[\w-]{22})"',
+        r'channel_id=(UC[\w-]{22})',
+    ]:
+        m = re.search(pattern, html)
+        if m:
+            return m.group(1)
+    return None
+
+async def _resolve_youtube_url(url: str) -> str | None:
+    """
+    Convert any YouTube channel URL to its RSS feed URL without an API key.
+
+    Handles:
+      • youtube.com/channel/UCxxxxxxx          → direct, no fetch needed
+      • youtube.com/@handle                    → fetch page, extract channelId
+      • youtube.com/user/username              → fetch page, extract channelId
+      • youtube.com/c/customname               → fetch page, extract channelId
+      • youtu.be/* or youtube.com/watch*       → not a channel, return None
+    """
+    parsed = urlparse(url)
+    if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
+        return None
+
+    path = parsed.path.rstrip("/")
+
+    # Direct channel ID — no fetch needed
+    m = re.match(r"^/channel/(UC[\w-]{22})$", path, re.IGNORECASE)
+    if m:
+        return _yt_rss_url(m.group(1))
+
+    # Handle, user, or custom name — fetch the page and extract channelId
+    if re.match(r"^/(@[\w.-]+|user/[\w.-]+|c/[\w.-]+)$", path, re.IGNORECASE):
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True, timeout=10.0, headers=_HEADERS
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            channel_id = _extract_channel_id_from_html(resp.text)
+            if channel_id:
+                return _yt_rss_url(channel_id)
+        except Exception:
+            pass
+
+    return None
+
 SearchSource = Literal["feedly", "podcast_index", "itunes", "gpodder", "fyyd", "youtube"]
 
 # ── Per-source fetch helpers ──────────────────────────────────────────────────
@@ -223,13 +283,60 @@ async def _search_fyyd(q: str, limit: int) -> FeedSearchResponse:
 
 
 async def _search_youtube(q: str, limit: int) -> FeedSearchResponse:
+    """
+    Search YouTube channels and return their RSS feed URLs.
+
+    Two code paths:
+    1. If YOUTUBE_API_KEY is set → use YouTube Data API v3 (full search).
+    2. If query is a @handle or a youtube.com URL → resolve without any key.
+    3. Otherwise → return a helpful empty result (no key, no URL query).
+    """
+    # Path 2: keyless handle / URL resolution
+    q_stripped = q.strip()
+    maybe_url = (
+        q_stripped
+        if q_stripped.startswith("http")
+        else f"https://www.youtube.com/{q_stripped}" if q_stripped.startswith("@")
+        else None
+    )
+    if maybe_url:
+        rss_url = await _resolve_youtube_url(maybe_url)
+        if rss_url:
+            # Fetch the channel page to get a title/thumbnail for the result card
+            channel_id_m = re.search(r"channel_id=(UC[\w-]{22})", rss_url)
+            channel_id = channel_id_m.group(1) if channel_id_m else None
+            return FeedSearchResponse(query=q, results=[FeedSearchResult(
+                feed_url=rss_url,
+                title=q_stripped.lstrip("@"),
+                description=f"YouTube channel · {q_stripped}",
+                website_url=f"https://www.youtube.com/channel/{channel_id}" if channel_id else maybe_url,
+                subscribers=None,
+                language=None,
+                cover_url=None,
+                velocity=None,
+            )])
+        # Looks like a URL but couldn't resolve — fall through to API or empty
+        if q_stripped.startswith("http"):
+            return FeedSearchResponse(query=q, results=[])
+
     api_key = os.getenv("YOUTUBE_API_KEY", "")
     if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="YouTube search requires a YOUTUBE_API_KEY env var. "
-                   "Get a free key (YouTube Data API v3) at console.cloud.google.com",
-        )
+        # No key and not a resolvable handle/URL — return empty with a hint in description
+        return FeedSearchResponse(query=q, results=[FeedSearchResult(
+            feed_url="",
+            title="YouTube API key not configured",
+            description=(
+                "Paste a channel URL (youtube.com/@handle) or set YOUTUBE_API_KEY "
+                "to enable full channel search."
+            ),
+            website_url=None,
+            subscribers=None,
+            language=None,
+            cover_url=None,
+            velocity=None,
+        )])
+
+    # Path 1: full API search
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -258,7 +365,7 @@ async def _search_youtube(q: str, limit: int) -> FeedSearchResponse:
         snippet = item.get("snippet", {})
         thumbnails = snippet.get("thumbnails", {})
         results.append(FeedSearchResult(
-            feed_url=f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+            feed_url=_yt_rss_url(channel_id),
             title=snippet.get("title"),
             description=snippet.get("description"),
             website_url=f"https://www.youtube.com/channel/{channel_id}",
@@ -344,6 +451,25 @@ async def discover_feeds(
         assert_public_url(url)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    # Fast-path: YouTube channel URLs — extract the RSS feed without scraping HTML.
+    # YouTube pages don't expose <link rel="alternate"> tags, so the generic HTML
+    # path returns nothing. We resolve the channel_id from the URL/page directly.
+    if "youtube.com" in parsed.netloc or "youtu.be" in parsed.netloc:
+        rss_url = await _resolve_youtube_url(url)
+        if rss_url:
+            channel_id_m = re.search(r"channel_id=(UC[\w-]{22})", rss_url)
+            channel_id = channel_id_m.group(1) if channel_id_m else None
+            return FeedDiscoverResponse(url=url, feeds=[DiscoveredFeed(
+                feed_url=rss_url,
+                title="YouTube channel",
+                feed_type="atom",
+                website_url=f"https://www.youtube.com/channel/{channel_id}" if channel_id else url,
+            )])
+        raise HTTPException(
+            status_code=422,
+            detail="Could not resolve YouTube channel. Paste the channel URL (youtube.com/@handle or youtube.com/channel/UCxxx).",
+        )
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=_HEADERS) as client:
         try:

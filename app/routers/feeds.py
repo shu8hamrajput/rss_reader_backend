@@ -96,7 +96,23 @@ async def create_feed(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if db.query(Feed).filter(Feed.url == payload.url, Feed.user_id == current_user.id).first():
+    from ..routers.search import _resolve_youtube_url
+
+    feed_url = payload.url.strip()
+
+    # Auto-convert YouTube channel URLs to their RSS feed equivalent so users
+    # can paste youtube.com/@handle or youtube.com/channel/UCxxx directly.
+    if "youtube.com" in feed_url or "youtu.be" in feed_url:
+        rss = await _resolve_youtube_url(feed_url)
+        if rss:
+            feed_url = rss
+        elif not feed_url.startswith("https://www.youtube.com/feeds/"):
+            raise HTTPException(
+                status_code=422,
+                detail="Could not resolve YouTube channel ID. Paste the channel page URL (e.g. youtube.com/@handle).",
+            )
+
+    if db.query(Feed).filter(Feed.url == feed_url, Feed.user_id == current_user.id).first():
         raise HTTPException(status_code=409, detail="You are already subscribed to this feed")
 
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
@@ -108,7 +124,7 @@ async def create_feed(
                 detail=f"Your plan allows up to {max_feeds} feeds. Upgrade to subscribe to more.",
             )
 
-    feed = Feed(url=payload.url, title=payload.title, user_id=current_user.id)
+    feed = Feed(url=feed_url, title=payload.title, user_id=current_user.id)
     db.add(feed)
     db.flush()
 
