@@ -134,7 +134,11 @@ def list_articles(
     count_col = func.count().over().label("_total")
     q_paged = (
         q
-        .options(defer(Article.full_content), defer(Article.search_vector))
+        .options(
+            defer(Article.content),        # RSS HTML (50–200 KB/article) — reader fetches GET /articles/{id}
+            defer(Article.full_content),   # fetched HTML (up to MBs) — reader fetches on demand
+            defer(Article.search_vector),  # binary tsvector — never serialised
+        )
         .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
         .add_columns(count_col)
         .offset((page - 1) * page_size)
