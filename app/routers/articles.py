@@ -46,6 +46,7 @@ def _owned_article(article_id: int, user: User, db: Session) -> Article:
         db.query(Article)
         .join(Feed)
         .filter(Article.id == article_id, Feed.user_id == user.id)
+        .options(defer(Article.search_vector))   # binary tsvector never serialised
         .first()
     )
     if not article:

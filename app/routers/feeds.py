@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, text
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, defer
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -135,7 +135,7 @@ def list_feeds_health(
     feeds = (
         db.query(Feed)
         .filter(Feed.user_id == current_user.id)
-        .options(selectinload(Feed.categories))
+        .options(selectinload(Feed.categories), defer(Feed.description))
         .order_by(Feed.fetch_failure_count.desc(), Feed.last_success_at.asc().nullsfirst())
         .limit(500)
         .all()
@@ -153,7 +153,10 @@ def list_feeds(
     q = (
         db.query(Feed)
         .filter(Feed.user_id == current_user.id)
-        .options(selectinload(Feed.categories))  # batch load categories in 1 query
+        .options(
+            selectinload(Feed.categories),
+            defer(Feed.description),   # not displayed in sidebar or feed list UI
+        )
     )
     if active_only:
         q = q.filter(Feed.is_active == True)

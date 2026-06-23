@@ -271,9 +271,10 @@ async def subscribe_collection(
     if existing:
         return CollectionSubscribeResult(subscribed=True, feeds_added=0)
 
-    existing_urls = {
-        _normalize_url(f.url) for f in db.query(Feed).filter(Feed.user_id == current_user.id).all()
-    }
+    # Project only Feed.url — loading full Feed ORM objects (title, description,
+    # etag, icon_url, …) just to build a URL set wastes bandwidth and memory.
+    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).all()
+    existing_urls = {_normalize_url(r.url) for r in url_rows}
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
     feed_count = len(existing_urls)
     feeds_added = 0
