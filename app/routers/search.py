@@ -62,33 +62,45 @@ def _extract_channel_id_from_html(html: str) -> str | None:
 
 async def _resolve_youtube_url(url: str) -> str | None:
     """
-    Convert any YouTube channel URL to its RSS feed URL without an API key.
+    Convert any YouTube URL to an RSS feed URL without an API key.
 
     Handles:
-      • youtube.com/channel/UCxxxxxxx          → direct, no fetch needed
+      • youtube.com/channel/UCxxxxxxx          → direct, no fetch
       • youtube.com/@handle                    → fetch page, extract channelId
       • youtube.com/user/username              → fetch page, extract channelId
       • youtube.com/c/customname               → fetch page, extract channelId
-      • youtu.be/* or youtube.com/watch*       → not a channel, return None
+      • youtube.com/playlist?list=PLxxx        → playlist RSS, no fetch
+      • youtube.com/watch?v=xxx                → fetch page, extract channelId
+      • youtu.be/xxx                           → fetch page, extract channelId
     """
     parsed = urlparse(url)
     if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
         return None
 
     path = parsed.path.rstrip("/")
+    query = parsed.query
 
-    # Direct channel ID — no fetch needed
+    # Playlist — has its own RSS feed, no fetch needed
+    pl_m = re.search(r"[?&]list=(PL[\w-]+)", query)
+    if pl_m:
+        return f"https://www.youtube.com/feeds/videos.xml?playlist_id={pl_m.group(1)}"
+
+    # Direct channel ID in URL
     m = re.match(r"^/channel/(UC[\w-]{22})$", path, re.IGNORECASE)
     if m:
         return _yt_rss_url(m.group(1))
 
-    # Handle, user, or custom name — fetch the page and extract channelId
-    if re.match(r"^/(@[\w.-]+|user/[\w.-]+|c/[\w.-]+)$", path, re.IGNORECASE):
+    # Handle, user, custom name, individual video, or youtu.be short link
+    # — fetch the page and extract channelId from the embedded JSON
+    if re.match(r"^/(@[\w.-]+|user/[\w.-]+|c/[\w.-]+|watch|shorts/[\w-]+)$", path, re.IGNORECASE) \
+            or "youtu.be" in parsed.netloc \
+            or "/watch" in path:
+        fetch_url = url
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True, timeout=10.0, headers=_HEADERS
             ) as client:
-                resp = await client.get(url)
+                resp = await client.get(fetch_url)
                 resp.raise_for_status()
             channel_id = _extract_channel_id_from_html(resp.text)
             if channel_id:
