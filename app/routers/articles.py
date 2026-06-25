@@ -85,6 +85,7 @@ def list_articles(
     is_bookmarked: bool | None = Query(None, description="Filter by bookmark status"),
     tag: str | None = Query(None, description="Filter by tag (e.g. read_later, saved_later)"),
     has_audio: bool | None = Query(None, description="Filter to audio/podcast episodes only"),
+    in_progress: bool | None = Query(None, description="Filter to episodes with a saved resume position"),
     search: str | None = Query(None, description="Full-text search (title + summary + content)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -114,6 +115,9 @@ def list_articles(
 
     if has_audio:
         q = q.filter(or_(Article.media_type.like('audio/%'), Article.media_type == 'video/youtube'))
+
+    if in_progress:
+        q = q.filter(Article.resume_at_seconds.isnot(None))
 
     if search:
         fts_article_ids = _fts_ids(search, db)
