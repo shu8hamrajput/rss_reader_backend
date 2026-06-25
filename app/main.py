@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,8 @@ limiter = Limiter(
     default_limits=["200/minute"],
     storage_uri=settings.redis_url,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -196,8 +199,9 @@ def _migrate() -> None:
             try:
                 conn.execute(text(stmt))
                 conn.commit()
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
+                logger.warning("Migration step skipped (may already be applied): %s", exc)
 
 
 app = FastAPI(

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, subqueryload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Article, Category, Feed, User
+from ..models import Article, Category, Feed, User, feed_categories
 from ..schemas import (
     CategoryResponse,
     FeedCreate,
@@ -31,7 +31,7 @@ def _build_feed_response(feed: Feed, db: Session) -> FeedResponse:
     article_count = db.query(func.count(Article.id)).filter(Article.feed_id == feed.id).scalar() or 0
     unread_count = (
         db.query(func.count(Article.id))
-        .filter(Article.feed_id == feed.id, Article.is_read == False)
+        .filter(Article.feed_id == feed.id, Article.is_read == False)  # noqa: E712
         .scalar() or 0
     )
     data = FeedResponse.model_validate(feed)
@@ -42,6 +42,66 @@ def _build_feed_response(feed: Feed, db: Session) -> FeedResponse:
         for c in feed.categories
     ]
     return data
+
+
+def _build_feed_responses_bulk(feeds: list[Feed], db: Session) -> list[FeedResponse]:
+    """Build FeedResponse objects for a list of feeds using batched SQL — avoids N+1.
+
+    Replaces per-feed COUNT queries in list endpoints with two aggregate queries
+    (total articles, unread articles) plus one query for category feed-counts.
+    Categories must already be eager-loaded on each Feed (e.g. via subqueryload).
+    """
+    if not feeds:
+        return []
+    feed_ids = [f.id for f in feeds]
+
+    total_rows = (
+        db.query(Article.feed_id, func.count(Article.id).label("cnt"))
+        .filter(Article.feed_id.in_(feed_ids))
+        .group_by(Article.feed_id)
+        .all()
+    )
+    article_counts = {r.feed_id: r.cnt for r in total_rows}
+
+    unread_rows = (
+        db.query(Article.feed_id, func.count(Article.id).label("cnt"))
+        .filter(Article.feed_id.in_(feed_ids), Article.is_read == False)  # noqa: E712
+        .group_by(Article.feed_id)
+        .all()
+    )
+    unread_counts = {r.feed_id: r.cnt for r in unread_rows}
+
+    # Batch category feed-counts to avoid per-category lazy load of category.feeds
+    cat_ids = list({c.id for f in feeds for c in f.categories})
+    cat_feed_counts: dict[int, int] = {}
+    if cat_ids:
+        cat_rows = (
+            db.query(
+                feed_categories.c.category_id,
+                func.count(feed_categories.c.feed_id).label("cnt"),
+            )
+            .filter(feed_categories.c.category_id.in_(cat_ids))
+            .group_by(feed_categories.c.category_id)
+            .all()
+        )
+        cat_feed_counts = {r[0]: r[1] for r in cat_rows}
+
+    results = []
+    for feed in feeds:
+        data = FeedResponse.model_validate(feed)
+        data.article_count = article_counts.get(feed.id, 0)
+        data.unread_count = unread_counts.get(feed.id, 0)
+        data.categories = [
+            CategoryResponse(
+                id=c.id,
+                name=c.name,
+                created_at=c.created_at,
+                feed_count=cat_feed_counts.get(c.id, 0),
+            )
+            for c in feed.categories
+        ]
+        results.append(data)
+    return results
 
 
 def _apply_categories(feed: Feed, category_ids: list[int], user: User, db: Session) -> None:
@@ -98,10 +158,11 @@ def list_feeds_health(
     feeds = (
         db.query(Feed)
         .filter(Feed.user_id == current_user.id)
+        .options(subqueryload(Feed.categories))
         .order_by(Feed.fetch_failure_count.desc(), Feed.last_success_at.asc().nullsfirst())
         .all()
     )
-    return FeedListResponse(total=len(feeds), items=[_build_feed_response(f, db) for f in feeds])
+    return FeedListResponse(total=len(feeds), items=_build_feed_responses_bulk(feeds, db))
 
 
 @router.get("", response_model=FeedListResponse, summary="List your subscribed feeds")
@@ -113,11 +174,11 @@ def list_feeds(
 ):
     q = db.query(Feed).filter(Feed.user_id == current_user.id)
     if active_only:
-        q = q.filter(Feed.is_active == True)
+        q = q.filter(Feed.is_active == True)  # noqa: E712
     if category_id is not None:
         q = q.filter(Feed.categories.any(id=category_id))
-    feeds = q.order_by(Feed.created_at.desc()).all()
-    return FeedListResponse(total=len(feeds), items=[_build_feed_response(f, db) for f in feeds])
+    feeds = q.options(subqueryload(Feed.categories)).order_by(Feed.created_at.desc()).all()
+    return FeedListResponse(total=len(feeds), items=_build_feed_responses_bulk(feeds, db))
 
 
 @router.get("/{feed_id}", response_model=FeedResponse, summary="Get a feed by ID")

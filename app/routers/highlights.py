@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
@@ -7,6 +9,8 @@ from ..config import settings
 from ..database import get_db
 from ..models import Article, Feed, Highlight, User
 from ..schemas import HighlightCreate, HighlightResponse, HighlightReviewItem, HighlightUpdate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Highlights"])
 
@@ -90,8 +94,8 @@ def create_highlight(
             "end_pos": h.end_pos,
             "color_id": h.color_id,
         })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Webhook delivery failed for highlight_created (highlight %d): %s", h.id, exc)
     return h
 
 
