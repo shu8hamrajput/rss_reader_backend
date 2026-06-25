@@ -38,7 +38,7 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 _HEADERS = {"User-Agent": "RSSReader/1.0 (+https://github.com)"}
 
-# ── YouTube helpers (no API key required) ─────────────────────────────────────
+# ── YouTube helpers (no API key required) ──────────────────────────────────────────────
 
 _YT_CHANNEL_RE = re.compile(
     r"youtube\.com/(?:channel/|(c/|user/|@))([\w@.-]+)", re.IGNORECASE
@@ -389,7 +389,7 @@ async def _search_youtube(q: str, limit: int) -> FeedSearchResponse:
     return FeedSearchResponse(query=q, results=results)
 
 
-# ── Feed search endpoint ──────────────────────────────────────────────────────
+# ── Feed search endpoint ─────────────────────────────────────────────────────
 
 @router.get(
     "/feeds",
@@ -422,7 +422,7 @@ async def search_feeds(
         return await _search_youtube(q, limit)
 
 
-# ── Website feed discovery ────────────────────────────────────────────────────
+# ── Website feed discovery ──────────────────────────────────────────────────────────
 
 # Mime types that indicate RSS/Atom/JSON feed links in <link> tags
 _FEED_MIME_TYPES = {
@@ -472,11 +472,10 @@ async def discover_feeds(
         if rss_url:
             channel_id_m = re.search(r"channel_id=(UC[\w-]{22})", rss_url)
             channel_id = channel_id_m.group(1) if channel_id_m else None
-            return FeedDiscoverResponse(url=url, feeds=[DiscoveredFeed(
+            return FeedDiscoverResponse(source_url=url, feeds=[DiscoveredFeed(
                 feed_url=rss_url,
                 title="YouTube channel",
                 feed_type="atom",
-                website_url=f"https://www.youtube.com/channel/{channel_id}" if channel_id else url,
             )])
         raise HTTPException(
             status_code=422,
