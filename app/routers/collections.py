@@ -42,13 +42,21 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip("/").lower()
 
 
-def _build_response(collection: Collection, current_user: User, db: Session) -> CollectionResponse:
-    is_subscribed = (
-        db.query(CollectionSubscription)
-        .filter(CollectionSubscription.collection_id == collection.id, CollectionSubscription.user_id == current_user.id)
-        .first()
-        is not None
-    )
+def _get_subscribed_collection_ids(user_id: int, db: Session) -> set[int]:
+    rows = db.query(CollectionSubscription.collection_id).filter(CollectionSubscription.user_id == user_id).all()
+    return {r.collection_id for r in rows}
+
+
+def _build_response(collection: Collection, current_user: User, db: Session, subscribed_ids: set[int] | None = None) -> CollectionResponse:
+    if subscribed_ids is not None:
+        is_subscribed = collection.id in subscribed_ids
+    else:
+        is_subscribed = (
+            db.query(CollectionSubscription)
+            .filter(CollectionSubscription.collection_id == collection.id, CollectionSubscription.user_id == current_user.id)
+            .first()
+            is not None
+        )
     data = CollectionResponse.model_validate(collection)
     data.owner_name = collection.owner.name
     data.is_subscribed = is_subscribed
@@ -118,7 +126,8 @@ def list_my_collections(
         .limit(200)
         .all()
     )
-    return [_build_response(c, current_user, db) for c in collections]
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
+    return [_build_response(c, current_user, db, subscribed_ids) for c in collections]
 
 
 @router.get("/subscribed", response_model=list[CollectionResponse], summary="List collections you're subscribed to")
@@ -134,7 +143,8 @@ def list_subscribed_collections(
         .limit(200)
         .all()
     )
-    return [_build_response(c, current_user, db) for c in collections]
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
+    return [_build_response(c, current_user, db, subscribed_ids) for c in collections]
 
 
 @router.get("/discover", response_model=CollectionListResponse, summary="Discover public collections")
@@ -157,9 +167,10 @@ def discover_collections(
         .limit(page_size)
         .all()
     )
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
     return CollectionListResponse(
         total=total, page=page, page_size=page_size,
-        items=[_build_response(c, current_user, db) for c in items],
+        items=[_build_response(c, current_user, db, subscribed_ids) for c in items],
     )
 
 

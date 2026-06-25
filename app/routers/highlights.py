@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
@@ -9,6 +11,7 @@ from ..models import Article, Feed, Highlight, User
 from ..schemas import HighlightCreate, HighlightResponse, HighlightReviewItem, HighlightUpdate
 
 router = APIRouter(tags=["Highlights"])
+logger = logging.getLogger(__name__)
 
 
 def _owned_highlight(highlight_id: int, user: User, db: Session) -> Highlight:
@@ -91,8 +94,8 @@ def create_highlight(
             "end_pos": h.end_pos,
             "color_id": h.color_id,
         })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Webhook fire failed for highlight %s: %s", h.id, exc)
     return h
 
 
@@ -156,7 +159,11 @@ def get_review_queue(
         else_=Highlight.reviewed_at,
     )
     rows = (
-        db.query(Highlight, Article)
+        db.query(
+            Highlight,
+            Article.title.label("article_title"),
+            Article.url.label("article_url"),
+        )
         .join(Article, Highlight.article_id == Article.id)
         .filter(Highlight.user_id == current_user.id)
         .order_by(nullsfirst(Highlight.reviewed_at.asc()))
@@ -164,12 +171,13 @@ def get_review_queue(
         .all()
     )
     result = []
-    for h, a in rows:
+    for row in rows:
+        h = row.Highlight
         result.append(HighlightReviewItem(
             id=h.id,
             article_id=h.article_id,
-            article_title=a.title,
-            article_url=a.url,
+            article_title=row.article_title,
+            article_url=row.article_url,
             start_pos=h.start_pos,
             end_pos=h.end_pos,
             color_id=h.color_id,

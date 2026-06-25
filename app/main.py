@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,7 @@ limiter = Limiter(
     default_limits=["200/minute"],
     storage_uri=settings.redis_url,
 )
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -199,12 +201,17 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_generated_candidates_status ON generated_candidates (status)",
             # AI-generated Anki question for highlights
             "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS ai_question TEXT",
+            # Performance indexes for common article filter/sort columns
+            "CREATE INDEX IF NOT EXISTS ix_articles_is_read ON articles (is_read)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_is_bookmarked ON articles (is_bookmarked)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_published_at ON articles (published_at DESC NULLS LAST)",
         ]
         for stmt in stmts:
             try:
                 conn.execute(text(stmt))
                 conn.commit()
-            except Exception:
+            except Exception as exc:
+                logger.warning("Migration statement failed (non-fatal): %s — %s", stmt[:120], exc)
                 conn.rollback()
 
 

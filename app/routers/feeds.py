@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session, selectinload, defer
@@ -18,6 +20,7 @@ from ..services.feed_parser import refresh_feed
 from ..services.plans import effective_plan, limits_for
 
 router = APIRouter(prefix="/feeds", tags=["Feeds"])
+logger = logging.getLogger(__name__)
 
 
 def _owned_feed(feed_id: int, user: User, db: Session) -> Feed:
@@ -137,8 +140,8 @@ async def create_feed(
     try:
         await refresh_feed(feed, db)
         db.refresh(feed)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Initial feed refresh failed for feed %s (%s): %s", feed.id, feed_url, exc)
 
     return _build_feed_response(feed, db)
 
