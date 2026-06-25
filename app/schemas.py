@@ -268,7 +268,7 @@ class ArticleResponse(BaseModel):
 
     id: int
     feed_id: int
-    guid: str
+    # guid omitted — internal deduplication key, never rendered in the UI
     title: str | None
     url: str | None
     author: str | None

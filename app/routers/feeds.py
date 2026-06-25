@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session, selectinload, defer
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -21,27 +21,64 @@ router = APIRouter(prefix="/feeds", tags=["Feeds"])
 
 
 def _owned_feed(feed_id: int, user: User, db: Session) -> Feed:
-    feed = db.query(Feed).filter(Feed.id == feed_id, Feed.user_id == user.id).first()
+    feed = (
+        db.query(Feed)
+        .filter(Feed.id == feed_id, Feed.user_id == user.id)
+        .options(selectinload(Feed.categories))
+        .first()
+    )
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
     return feed
 
 
-def _build_feed_response(feed: Feed, db: Session) -> FeedResponse:
-    article_count = db.query(func.count(Article.id)).filter(Article.feed_id == feed.id).scalar() or 0
-    unread_count = (
-        db.query(func.count(Article.id))
-        .filter(Article.feed_id == feed.id, Article.is_read == False)
-        .scalar() or 0
-    )
+def _batch_counts(feed_ids: list[int], db: Session) -> dict[int, tuple[int, int]]:
+    """Single SQL query → {feed_id: (article_count, unread_count)}.
+
+    Replaces the previous 2-queries-per-feed N+1 pattern in _build_feed_response.
+    On a 25-feed account this cuts GET /feeds from ~75 queries down to 3.
+    """
+    if not feed_ids:
+        return {}
+    rows = db.execute(
+        text("""
+            SELECT feed_id,
+                   COUNT(*)                              AS total,
+                   COUNT(*) FILTER (WHERE is_read = false) AS unread
+            FROM   articles
+            WHERE  feed_id = ANY(:ids)
+            GROUP  BY feed_id
+        """),
+        {"ids": feed_ids},
+    ).fetchall()
+    return {r.feed_id: (int(r.total), int(r.unread)) for r in rows}
+
+
+def _to_feed_response(feed: Feed, article_count: int, unread_count: int) -> FeedResponse:
     data = FeedResponse.model_validate(feed)
     data.article_count = article_count
     data.unread_count = unread_count
     data.categories = [
-        CategoryResponse(id=c.id, name=c.name, created_at=c.created_at, feed_count=len(c.feeds))
+        CategoryResponse(id=c.id, name=c.name, created_at=c.created_at)
         for c in feed.categories
     ]
     return data
+
+
+def _build_feed_response(feed: Feed, db: Session) -> FeedResponse:
+    """Single-feed path (create / update / snooze / get). Uses batch helper for consistency."""
+    counts = _batch_counts([feed.id], db)
+    article_count, unread_count = counts.get(feed.id, (0, 0))
+    return _to_feed_response(feed, article_count, unread_count)
+
+
+def _build_feed_list(feeds: list[Feed], db: Session) -> list[FeedResponse]:
+    """Multi-feed path. Fetches all counts in one query instead of 2N queries."""
+    counts = _batch_counts([f.id for f in feeds], db)
+    return [
+        _to_feed_response(f, *counts.get(f.id, (0, 0)))
+        for f in feeds
+    ]
 
 
 def _apply_categories(feed: Feed, category_ids: list[int], user: User, db: Session) -> None:
@@ -59,7 +96,23 @@ async def create_feed(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if db.query(Feed).filter(Feed.url == payload.url, Feed.user_id == current_user.id).first():
+    from ..routers.search import _resolve_youtube_url
+
+    feed_url = payload.url.strip()
+
+    # Auto-convert YouTube channel URLs to their RSS feed equivalent so users
+    # can paste youtube.com/@handle or youtube.com/channel/UCxxx directly.
+    if "youtube.com" in feed_url or "youtu.be" in feed_url:
+        rss = await _resolve_youtube_url(feed_url)
+        if rss:
+            feed_url = rss
+        elif not feed_url.startswith("https://www.youtube.com/feeds/"):
+            raise HTTPException(
+                status_code=422,
+                detail="Could not resolve YouTube channel ID. Paste the channel page URL (e.g. youtube.com/@handle).",
+            )
+
+    if db.query(Feed).filter(Feed.url == feed_url, Feed.user_id == current_user.id).first():
         raise HTTPException(status_code=409, detail="You are already subscribed to this feed")
 
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
@@ -71,7 +124,7 @@ async def create_feed(
                 detail=f"Your plan allows up to {max_feeds} feeds. Upgrade to subscribe to more.",
             )
 
-    feed = Feed(url=payload.url, title=payload.title, user_id=current_user.id)
+    feed = Feed(url=feed_url, title=payload.title, user_id=current_user.id)
     db.add(feed)
     db.flush()
 
@@ -98,10 +151,12 @@ def list_feeds_health(
     feeds = (
         db.query(Feed)
         .filter(Feed.user_id == current_user.id)
+        .options(selectinload(Feed.categories), defer(Feed.description))
         .order_by(Feed.fetch_failure_count.desc(), Feed.last_success_at.asc().nullsfirst())
+        .limit(500)
         .all()
     )
-    return FeedListResponse(total=len(feeds), items=[_build_feed_response(f, db) for f in feeds])
+    return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
 
 
 @router.get("", response_model=FeedListResponse, summary="List your subscribed feeds")
@@ -111,13 +166,20 @@ def list_feeds(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Feed).filter(Feed.user_id == current_user.id)
+    q = (
+        db.query(Feed)
+        .filter(Feed.user_id == current_user.id)
+        .options(
+            selectinload(Feed.categories),
+            defer(Feed.description),   # not displayed in sidebar or feed list UI
+        )
+    )
     if active_only:
         q = q.filter(Feed.is_active == True)
     if category_id is not None:
         q = q.filter(Feed.categories.any(id=category_id))
-    feeds = q.order_by(Feed.created_at.desc()).all()
-    return FeedListResponse(total=len(feeds), items=[_build_feed_response(f, db) for f in feeds])
+    feeds = q.order_by(Feed.created_at.desc()).limit(500).all()
+    return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
 
 
 @router.get("/{feed_id}", response_model=FeedResponse, summary="Get a feed by ID")

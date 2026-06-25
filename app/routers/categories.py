@@ -27,7 +27,7 @@ def list_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    cats = db.query(Category).filter(Category.user_id == current_user.id).order_by(Category.name).all()
+    cats = db.query(Category).filter(Category.user_id == current_user.id).order_by(Category.name).limit(200).all()
     return [_to_response(c) for c in cats]
 
 

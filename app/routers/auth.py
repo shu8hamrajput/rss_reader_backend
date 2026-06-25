@@ -190,6 +190,37 @@ async def google_callback(
     return redirect
 
 
+# ── Desktop native app helpers ───────────────────────────────────────────────
+
+# Redirect URIs allowed for native desktop clients (loopback per RFC 8252).
+_DESKTOP_ALLOWED_REDIRECTS: frozenset[str] = frozenset({
+    "http://127.0.0.1:8899/callback",
+    "http://localhost:8899/callback",
+})
+
+
+@router.get(
+    "/google/desktop-url",
+    summary="Return Google OAuth URL for desktop/native app flow",
+    description=(
+        "Desktop clients that cannot use browser redirects call this to obtain "
+        "the Google consent URL with a loopback redirect_uri (RFC 8252). "
+        "They open the URL in the system browser, capture the code on :8899, "
+        "then exchange it via POST /google/token."
+    ),
+)
+def google_desktop_url(redirect_uri: str = Query(..., description="Loopback callback URI")):
+    _require_google_config()
+    if redirect_uri not in _DESKTOP_ALLOWED_REDIRECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"redirect_uri not in desktop allowlist. Allowed: {sorted(_DESKTOP_ALLOWED_REDIRECTS)}",
+        )
+    state = generate_oauth_state()
+    url = _google_auth_url(redirect_uri, state)
+    return {"url": url, "state": state}
+
+
 # ── Mobile / SPA token exchange ───────────────────────────────────────────────
 
 @router.post(
@@ -385,6 +416,7 @@ def list_sessions(
         db.query(UserSession)
         .filter(UserSession.user_id == current_user.id)
         .order_by(UserSession.last_seen_at.desc())
+        .limit(50)
         .all()
     )
 

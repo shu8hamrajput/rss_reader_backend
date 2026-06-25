@@ -4,7 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from ..auth import get_current_user
 from ..config import settings
@@ -95,7 +95,21 @@ async def generate_briefing(
     elif payload.category_id is not None:
         q = q.filter(Feed.categories.any(id=payload.category_id))
 
-    rows = q.order_by(Article.published_at.desc()).limit(30).all()
+    # Only load the columns the briefing prompt actually uses.
+    # full_content (fetched HTML, up to MBs) and search_vector (binary tsvector)
+    # are never read here — skipping them cuts per-briefing DB transfer dramatically.
+    rows = (
+        q.options(
+            load_only(
+                Article.id, Article.feed_id, Article.title,
+                Article.summary, Article.content, Article.published_at,
+            ),
+            load_only(Feed.id, Feed.title, Feed.url),
+        )
+        .order_by(Article.published_at.desc())
+        .limit(30)
+        .all()
+    )
 
     if not rows:
         raise HTTPException(

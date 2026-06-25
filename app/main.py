@@ -58,10 +58,18 @@ def _migrate() -> None:
             # Feed health tracking
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS fetch_failure_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
-            # Backfill search_vector for rows written before the trigger existed
-            """UPDATE articles SET search_vector = to_tsvector('english',
-                 coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
-               WHERE search_vector IS NULL""",
+            # Backfill search_vector only when there are rows that need it.
+            # Wrapping in a PL/pgSQL DO block with an EXISTS check avoids a full
+            # table scan on every cold start once all rows are already populated.
+            """DO $$
+               BEGIN
+                 IF EXISTS (SELECT 1 FROM articles WHERE search_vector IS NULL LIMIT 1) THEN
+                   UPDATE articles
+                   SET    search_vector = to_tsvector('english',
+                            coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
+                   WHERE  search_vector IS NULL;
+                 END IF;
+               END $$""",
             # Per-user preferences table for cross-device settings sync
             """CREATE TABLE IF NOT EXISTS user_preferences (
                  id SERIAL PRIMARY KEY,

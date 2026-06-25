@@ -48,6 +48,7 @@ def list_highlights(
         db.query(Highlight)
         .filter(Highlight.article_id == article_id, Highlight.user_id == current_user.id)
         .order_by(Highlight.start_pos)
+        .limit(500)
         .all()
     )
 
@@ -208,8 +209,15 @@ def export_highlights(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Project only the two Article columns we actually use (title, url).
+    # The previous join loaded full Article ORM objects including content /
+    # full_content which are never read here.
     rows = (
-        db.query(Highlight, Article)
+        db.query(
+            Highlight,
+            Article.title.label("article_title"),
+            Article.url.label("article_url"),
+        )
         .join(Article, Highlight.article_id == Article.id)
         .filter(Highlight.user_id == current_user.id)
         .order_by(Highlight.created_at.asc())
@@ -217,18 +225,18 @@ def export_highlights(
     )
     export = [
         {
-            "id": h.id,
-            "article_id": h.article_id,
-            "article_title": a.title,
-            "article_url": a.url,
-            "start_pos": h.start_pos,
-            "end_pos": h.end_pos,
-            "color_id": h.color_id,
-            "text": h.text,
-            "note": h.note,
-            "created_at": h.created_at.isoformat() if h.created_at else None,
+            "id": row.Highlight.id,
+            "article_id": row.Highlight.article_id,
+            "article_title": row.article_title,
+            "article_url": row.article_url,
+            "start_pos": row.Highlight.start_pos,
+            "end_pos": row.Highlight.end_pos,
+            "color_id": row.Highlight.color_id,
+            "text": row.Highlight.text,
+            "note": row.Highlight.note,
+            "created_at": row.Highlight.created_at.isoformat() if row.Highlight.created_at else None,
         }
-        for h, a in rows
+        for row in rows
     ]
     return JSONResponse(
         content=export,
@@ -252,8 +260,8 @@ async def generate_anki_question(
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=503, detail="AI question generation not configured")
 
-    article = db.query(Article).filter(Article.id == h.article_id).first()
-    article_title = article.title if article else "Unknown article"
+    row = db.query(Article.title).filter(Article.id == h.article_id).first()
+    article_title = row.title if row else "Unknown article"
 
     from anthropic import Anthropic
     client = Anthropic(api_key=settings.anthropic_api_key)
@@ -289,18 +297,22 @@ def export_highlights_anki(
     current_user: User = Depends(get_current_user),
 ):
     rows = (
-        db.query(Highlight, Article)
+        db.query(
+            Highlight,
+            Article.title.label("article_title"),
+        )
         .join(Article, Highlight.article_id == Article.id)
         .filter(Highlight.user_id == current_user.id)
         .order_by(Highlight.created_at.asc())
         .all()
     )
     lines = ["#separator:tab", "#html:false", "#notetype:Basic", "#columns:Front\tBack\tTags"]
-    for h, a in rows:
+    for row in rows:
+        h = row.Highlight
         front = h.ai_question or h.note
         if not front or not h.text:
             continue
-        tag = (a.title or "").replace(" ", "_").replace("\t", " ")[:40]
+        tag = (row.article_title or "").replace(" ", "_").replace("\t", " ")[:40]
         back = h.text.replace("\t", " ").replace("\n", " ")
         front_clean = front.replace("\t", " ").replace("\n", " ")
         lines.append(f"{front_clean}\t{back}\t{tag}")
