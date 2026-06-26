@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -27,7 +27,14 @@ def list_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    cats = db.query(Category).filter(Category.user_id == current_user.id).order_by(Category.name).limit(200).all()
+    cats = (
+        db.query(Category)
+        .options(selectinload(Category.feeds))
+        .filter(Category.user_id == current_user.id)
+        .order_by(Category.name)
+        .limit(200)
+        .all()
+    )
     return [_to_response(c) for c in cats]
 
 

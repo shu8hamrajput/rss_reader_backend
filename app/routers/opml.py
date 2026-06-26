@@ -6,6 +6,7 @@ Export: GET  /opml/export   (returns application/xml)
 """
 import csv
 import io
+import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Annotated
@@ -14,7 +15,7 @@ import defusedxml.ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -24,10 +25,12 @@ from ..services.feed_parser import refresh_feed
 
 router = APIRouter(prefix="/opml", tags=["OPML"])
 
+logger = logging.getLogger(__name__)
+
 _MAX_OPML_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
-# ── Import ────────────────────────────────────────────────────────────────────
+# ── Import ─────────────────────────────────────────────────────────────────────────────
 
 def _iter_outlines(element: ET.Element, folder: str | None = None):
     """Yield (xml_url, title, folder) tuples from nested OPML outlines."""
@@ -115,7 +118,7 @@ async def import_opml(
     return OPMLImportResult(added=added, skipped=skipped, failed=failed, errors=errors)
 
 
-# ── Export ────────────────────────────────────────────────────────────────────
+# ── Export ────────────────────────────────────────────────────────────────────────────
 
 @router.get(
     "/export",
@@ -128,7 +131,12 @@ def export_opml(
     current_user: User = Depends(get_current_user),
 ):
     feeds = db.query(Feed).filter(Feed.user_id == current_user.id).all()
-    categories = db.query(Category).filter(Category.user_id == current_user.id).all()
+    categories = (
+        db.query(Category)
+        .options(selectinload(Category.feeds))
+        .filter(Category.user_id == current_user.id)
+        .all()
+    )
 
     root = ET.Element("opml", version="1.0")
     head = ET.SubElement(root, "head")
@@ -180,7 +188,7 @@ def export_opml(
     )
 
 
-# ── YouTube subscriptions CSV import ─────────────────────────────────────────
+# ── YouTube subscriptions CSV import ─────────────────────────────────────────────────────
 
 @router.post(
     "/import-youtube",
@@ -259,7 +267,7 @@ async def import_youtube_csv(
         for feed in new_feeds:
             try:
                 refresh_feed_by_id.delay(feed.id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to enqueue refresh for feed %d: %s", feed.id, exc)
 
     return OPMLImportResult(added=added, skipped=skipped, failed=failed, errors=errors)

@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -114,7 +114,8 @@ def _tag_list(article: Article) -> list[str]:
     try:
         parsed = json.loads(article.tags)
         return parsed if isinstance(parsed, list) else []
-    except Exception:
+    except Exception as exc:
+        logger.debug("Could not parse tags for article %d: %s", article.id, exc)
         return []
 
 
@@ -287,7 +288,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -459,6 +460,7 @@ def _generate_candidate(db, candidate: "GeneratedCandidate", url: str, use_llm: 
         candidate.error = str(exc)[:500]
         candidate.completed_at = datetime.now(timezone.utc)
         db.commit()
+        raise
 
 
 @celery_app.task(name="app.tasks.generate_fetcher_candidate")

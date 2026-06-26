@@ -205,6 +205,15 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_articles_is_read ON articles (is_read)",
             "CREATE INDEX IF NOT EXISTS ix_articles_is_bookmarked ON articles (is_bookmarked)",
             "CREATE INDEX IF NOT EXISTS ix_articles_published_at ON articles (published_at DESC NULLS LAST)",
+            # Composite index for the feed-refresh hot path: WHERE feed_id = X AND created_at >= Y
+            "CREATE INDEX IF NOT EXISTS ix_articles_feed_id_created_at ON articles (feed_id, created_at DESC)",
+            # Partial index for reading-stats range queries on read_at
+            "CREATE INDEX IF NOT EXISTS ix_articles_read_at ON articles (read_at DESC NULLS LAST) WHERE read_at IS NOT NULL",
+            # FK indexes missing from models — prevent seq-scans on joins and cascade deletes
+            "CREATE INDEX IF NOT EXISTS ix_alert_matches_feed_id ON alert_matches (feed_id)",
+            "CREATE INDEX IF NOT EXISTS ix_parser_requests_article_id ON parser_requests (article_id)",
+            # Partial index for newly imported feeds pending first fetch
+            "CREATE INDEX IF NOT EXISTS ix_feeds_last_fetched_at_null ON feeds (last_fetched_at) WHERE last_fetched_at IS NULL",
         ]
         for stmt in stmts:
             try:
