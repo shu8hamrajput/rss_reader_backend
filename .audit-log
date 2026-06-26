@@ -1,0 +1,7 @@
+2026-06-26 — hourly audit pass: no issues found
+  - N+1 queries: already resolved via _batch_counts helper
+  - Missing defer(): already applied on content, full_content, search_vector
+  - Unbounded lists: all endpoints have .limit() calls
+  - Silent exception swallowing: none found, all except blocks log warnings
+  - Missing indexes: comprehensive set already in _migrate()
+  - CORS: allow_credentials not needed for Bearer token auth pattern
