@@ -19,7 +19,6 @@ limiter = Limiter(
     default_limits=["200/minute"],
     storage_uri=settings.redis_url,
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -61,10 +60,18 @@ def _migrate() -> None:
             # Feed health tracking
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS fetch_failure_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
-            # Backfill search_vector for rows written before the trigger existed
-            """UPDATE articles SET search_vector = to_tsvector('english',
-                 coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
-               WHERE search_vector IS NULL""",
+            # Backfill search_vector only when there are rows that need it.
+            # Wrapping in a PL/pgSQL DO block with an EXISTS check avoids a full
+            # table scan on every cold start once all rows are already populated.
+            """DO $$
+               BEGIN
+                 IF EXISTS (SELECT 1 FROM articles WHERE search_vector IS NULL LIMIT 1) THEN
+                   UPDATE articles
+                   SET    search_vector = to_tsvector('english',
+                            coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
+                   WHERE  search_vector IS NULL;
+                 END IF;
+               END $$""",
             # Per-user preferences table for cross-device settings sync
             """CREATE TABLE IF NOT EXISTS user_preferences (
                  id SERIAL PRIMARY KEY,
@@ -194,14 +201,20 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_generated_candidates_status ON generated_candidates (status)",
             # AI-generated Anki question for highlights
             "ALTER TABLE highlights ADD COLUMN IF NOT EXISTS ai_question TEXT",
+            # Performance indexes for common article filter/sort columns
+            "CREATE INDEX IF NOT EXISTS ix_articles_is_read ON articles (is_read)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_is_bookmarked ON articles (is_bookmarked)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_published_at ON articles (published_at DESC NULLS LAST)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_read_at ON articles (read_at)",
+            "CREATE INDEX IF NOT EXISTS ix_articles_created_at ON articles (created_at)",
         ]
         for stmt in stmts:
             try:
                 conn.execute(text(stmt))
                 conn.commit()
             except Exception as exc:
+                logger.warning("Migration statement failed (non-fatal): %s — %s", stmt[:120], exc)
                 conn.rollback()
-                logger.warning("Migration step skipped (may already be applied): %s", exc)
 
 
 app = FastAPI(

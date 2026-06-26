@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -42,7 +42,7 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def _cluster_stories(db, articles: list[Article], user_id: int) -> None:
+def _cluster_stories(db, articles: list[Article]) -> None:
     """Assign story_cluster_id to new articles that share a topic with same-day articles.
 
     Uses Jaccard similarity on title tokens. Articles with similarity >= 0.4
@@ -53,8 +53,7 @@ def _cluster_stories(db, articles: list[Article], user_id: int) -> None:
         return
 
     since = datetime.now(timezone.utc) - timedelta(hours=36)
-    nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).join(Feed).filter(
-        Feed.user_id == user_id,
+    nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
         Article.published_at >= since,
         Article.id.notin_([a.id for a in articles]),
     ).all()
@@ -220,7 +219,6 @@ def _match_alerts(db, feed_id: int, user_id: int, since: datetime) -> None:
                         WHERE feed_id = :feed_id
                           AND created_at >= :since
                           AND search_vector @@ websearch_to_tsquery('english', :q)
-                        LIMIT 100
                     """),
                     {"feed_id": feed_id, "since": since, "q": alert.query},
                 ).fetchall()
@@ -272,13 +270,14 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             headers["X-RSS-Signature"] = f"sha256={sig}"
         try:
             # Fire-and-forget sync; failures are logged and do not block the task
-            httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
+            import httpx as _httpx
+            _httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
             wh.last_fired_at = datetime.now(timezone.utc)
         except Exception as exc:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ─────────────────────────────────────────────────────────────────
+# ── Celery tasks ──────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -312,7 +311,7 @@ def refresh_all_feeds() -> None:
                             Article.feed_id == feed.id,
                             Article.created_at >= before_refresh,
                         ).all()
-                        _cluster_stories(db, new_articles, feed.user_id)
+                        _cluster_stories(db, new_articles)
                         _apply_rules(db, feed.user_id, new_articles)
                         publish(
                             feed.user_id,
@@ -354,7 +353,7 @@ def refresh_feed_by_id(feed_id: int) -> int:
                     Article.feed_id == feed.id,
                     Article.created_at >= before_refresh,
                 ).all()
-                _cluster_stories(db, new_articles, feed.user_id)
+                _cluster_stories(db, new_articles)
                 _apply_rules(db, feed.user_id, new_articles)
                 db.commit()
                 publish(
@@ -446,6 +445,7 @@ def _generate_candidate(db, candidate: "GeneratedCandidate", url: str, use_llm: 
         candidate.completed_at = datetime.now(timezone.utc)
         db.commit()
     except Exception as exc:
+        logger.error("parser_gen candidate %d failed: %s", candidate.id, exc, exc_info=True)
         candidate.status = "failed"
         candidate.error = str(exc)[:500]
         candidate.completed_at = datetime.now(timezone.utc)
