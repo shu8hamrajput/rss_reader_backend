@@ -6,7 +6,7 @@ import zipfile
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import exists, nullslast, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -147,6 +147,7 @@ def export_markdown_vault(
             articles = (
                 db.query(Article)
                 .filter(Article.id.in_(chunk_ids))
+                .options(selectinload(Article.feed))
                 .all()
             )
             # Re-sort to match original ordering (IN loses order).

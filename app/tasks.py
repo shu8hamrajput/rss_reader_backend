@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -80,7 +80,17 @@ def _cluster_stories(db, articles: list[Article]) -> None:
 
         if best_cluster:
             article.story_cluster_id = best_cluster
-            # Also update the matched existing articles that don't have a cluster yet
+            # Persist cluster_id to existing unclustered articles that matched —
+            # previously only the in-memory list was updated, leaving those rows
+            # with story_cluster_id=NULL in the DB.
+            newly_clustered_ids = [
+                eid for eid, etokens, ecluster in existing
+                if not ecluster and _jaccard(tokens, etokens) > 0.39
+            ]
+            if newly_clustered_ids:
+                db.query(Article).filter(Article.id.in_(newly_clustered_ids)).update(
+                    {"story_cluster_id": best_cluster}, synchronize_session=False
+                )
             existing = [
                 (eid, etokens, best_cluster if _jaccard(tokens, etokens) > 0.39 and not ecluster else ecluster)
                 for eid, etokens, ecluster in existing
@@ -277,7 +287,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ──────────────────────────────────────────────────────────────
+# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:

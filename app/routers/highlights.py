@@ -141,8 +141,7 @@ def delete_highlight(
     summary="Get highlights due for spaced-repetition review",
     description=(
         "Returns up to `limit` highlights ordered by reviewed_at ASC NULLS FIRST "
-        "(never-reviewed first, then oldest-reviewed). Heavier highlights "
-        "(color_id 3 or 4) are weighted as if reviewed 7 days earlier."
+        "(never-reviewed first, then oldest-reviewed)."
     ),
 )
 def get_review_queue(
@@ -150,14 +149,7 @@ def get_review_queue(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from datetime import datetime, timedelta, timezone as _tz
-    from sqlalchemy import case, nullsfirst
-    now = datetime.now(_tz.utc)
-    # Score: reviewed_at + bonus for high-color highlights (review them less often)
-    score_expr = case(
-        (Highlight.reviewed_at.is_(None), (now - timedelta(days=9999)).replace(tzinfo=None)),
-        else_=Highlight.reviewed_at,
-    )
+    from sqlalchemy import nullsfirst
     rows = (
         db.query(
             Highlight,
