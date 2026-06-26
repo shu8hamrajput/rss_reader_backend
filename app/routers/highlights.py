@@ -229,6 +229,7 @@ def export_highlights(
         .join(Article, Highlight.article_id == Article.id)
         .filter(Highlight.user_id == current_user.id)
         .order_by(Highlight.created_at.asc())
+        .limit(10_000)
         .all()
     )
     export = [
@@ -312,6 +313,7 @@ def export_highlights_anki(
         .join(Article, Highlight.article_id == Article.id)
         .filter(Highlight.user_id == current_user.id)
         .order_by(Highlight.created_at.asc())
+        .limit(10_000)
         .all()
     )
     lines = ["#separator:tab", "#html:false", "#notetype:Basic", "#columns:Front\tBack\tTags"]
