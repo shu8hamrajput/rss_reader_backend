@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -56,7 +56,7 @@ def _cluster_stories(db, articles: list[Article]) -> None:
     nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
         Article.published_at >= since,
         Article.id.notin_([a.id for a in articles]),
-    ).limit(5000).all()
+    ).all()
 
     # Build lookup: {id: (title_tokens, cluster_id)}
     existing: list[tuple[int, set[str], str | None]] = [
@@ -270,11 +270,8 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
     for wh in webhooks:
         try:
             events = json.loads(wh.events or "[]")
-        except (json.JSONDecodeError, ValueError):
-            logger.error(
-                "Webhook %d has malformed events JSON: %r",
-                wh.id, wh.events, exc_info=True
-            )
+        except Exception as exc:
+            logger.warning("Could not parse events for webhook %d: %s", wh.id, exc)
             events = []
         if event not in events:
             continue
@@ -292,7 +289,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
