@@ -66,14 +66,24 @@ def _build_response(collection: Collection, current_user: User, db: Session, sub
 
 
 def _owned_collection(collection_id: int, user: User, db: Session) -> Collection:
-    collection = db.query(Collection).filter(Collection.id == collection_id, Collection.owner_id == user.id).first()
+    collection = (
+        db.query(Collection)
+        .filter(Collection.id == collection_id, Collection.owner_id == user.id)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .first()
+    )
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     return collection
 
 
 def _visible_collection(collection_id: int, user: User, db: Session) -> Collection:
-    collection = db.query(Collection).filter(Collection.id == collection_id).first()
+    collection = (
+        db.query(Collection)
+        .filter(Collection.id == collection_id)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .first()
+    )
     if not collection or (not collection.is_public and collection.owner_id != user.id):
         raise HTTPException(status_code=404, detail="Collection not found")
     return collection
@@ -121,8 +131,8 @@ def list_my_collections(
 ):
     collections = (
         db.query(Collection)
-        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .filter(Collection.owner_id == current_user.id)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .order_by(Collection.created_at.desc())
         .limit(200)
         .all()
@@ -138,9 +148,9 @@ def list_subscribed_collections(
 ):
     collections = (
         db.query(Collection)
-        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .join(CollectionSubscription, CollectionSubscription.collection_id == Collection.id)
         .filter(CollectionSubscription.user_id == current_user.id)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .order_by(CollectionSubscription.subscribed_at.desc())
         .limit(200)
         .all()
@@ -157,14 +167,15 @@ def discover_collections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Collection).options(selectinload(Collection.owner), selectinload(Collection.items)).filter(Collection.is_public == True)
+    q = db.query(Collection).filter(Collection.is_public == True)
     if search:
         term = f"%{search}%"
         q = q.filter(or_(Collection.name.ilike(term), Collection.description.ilike(term)))
 
     total = q.count()
     items = (
-        q.order_by(Collection.subscriber_count.desc(), Collection.created_at.desc())
+        q.options(selectinload(Collection.owner), selectinload(Collection.items))
+        .order_by(Collection.subscriber_count.desc(), Collection.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
