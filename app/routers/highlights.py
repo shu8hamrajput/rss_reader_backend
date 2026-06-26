@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
@@ -145,7 +145,7 @@ def delete_highlight(
     ),
 )
 def get_review_queue(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

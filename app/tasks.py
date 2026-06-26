@@ -281,8 +281,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             headers["X-RSS-Signature"] = f"sha256={sig}"
         try:
             # Fire-and-forget sync; failures are logged and do not block the task
-            import httpx as _httpx
-            _httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
+            httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
             wh.last_fired_at = datetime.now(timezone.utc)
         except Exception as exc:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)

@@ -2,7 +2,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -66,14 +66,24 @@ def _build_response(collection: Collection, current_user: User, db: Session, sub
 
 
 def _owned_collection(collection_id: int, user: User, db: Session) -> Collection:
-    collection = db.query(Collection).filter(Collection.id == collection_id, Collection.owner_id == user.id).first()
+    collection = (
+        db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .filter(Collection.id == collection_id, Collection.owner_id == user.id)
+        .first()
+    )
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     return collection
 
 
 def _visible_collection(collection_id: int, user: User, db: Session) -> Collection:
-    collection = db.query(Collection).filter(Collection.id == collection_id).first()
+    collection = (
+        db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .filter(Collection.id == collection_id)
+        .first()
+    )
     if not collection or (not collection.is_public and collection.owner_id != user.id):
         raise HTTPException(status_code=404, detail="Collection not found")
     return collection
@@ -121,6 +131,7 @@ def list_my_collections(
 ):
     collections = (
         db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .filter(Collection.owner_id == current_user.id)
         .order_by(Collection.created_at.desc())
         .limit(200)
@@ -137,6 +148,7 @@ def list_subscribed_collections(
 ):
     collections = (
         db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .join(CollectionSubscription, CollectionSubscription.collection_id == Collection.id)
         .filter(CollectionSubscription.user_id == current_user.id)
         .order_by(CollectionSubscription.subscribed_at.desc())
@@ -155,7 +167,7 @@ def discover_collections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Collection).filter(Collection.is_public == True)
+    q = db.query(Collection).options(selectinload(Collection.owner), selectinload(Collection.items)).filter(Collection.is_public == True)
     if search:
         term = f"%{search}%"
         q = q.filter(or_(Collection.name.ilike(term), Collection.description.ilike(term)))
