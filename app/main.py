@@ -205,8 +205,18 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_articles_is_read ON articles (is_read)",
             "CREATE INDEX IF NOT EXISTS ix_articles_is_bookmarked ON articles (is_bookmarked)",
             "CREATE INDEX IF NOT EXISTS ix_articles_published_at ON articles (published_at DESC NULLS LAST)",
-            "CREATE INDEX IF NOT EXISTS ix_articles_read_at ON articles (read_at)",
-            "CREATE INDEX IF NOT EXISTS ix_articles_created_at ON articles (created_at)",
+            # Composite index for the feed-refresh hot path: WHERE feed_id = X AND created_at >= Y
+            "CREATE INDEX IF NOT EXISTS ix_articles_feed_id_created_at ON articles (feed_id, created_at DESC)",
+            # Partial index for reading-stats range queries on read_at
+            "CREATE INDEX IF NOT EXISTS ix_articles_read_at ON articles (read_at DESC NULLS LAST) WHERE read_at IS NOT NULL",
+            # FK indexes missing from models — prevent seq-scans on joins and cascade deletes
+            "CREATE INDEX IF NOT EXISTS ix_alert_matches_feed_id ON alert_matches (feed_id)",
+            "CREATE INDEX IF NOT EXISTS ix_parser_requests_article_id ON parser_requests (article_id)",
+            # Partial index for newly imported feeds pending first fetch
+            "CREATE INDEX IF NOT EXISTS ix_feeds_last_fetched_at_null ON feeds (last_fetched_at) WHERE last_fetched_at IS NULL",
+            # Partial indexes for media type and in-progress podcast filter queries
+            "CREATE INDEX IF NOT EXISTS ix_articles_media_type ON articles (media_type) WHERE media_type IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_articles_in_progress ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL AND resume_at_seconds > 0",
         ]
         for stmt in stmts:
             try:
@@ -253,8 +263,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 app.include_router(auth.router,       prefix="/api/v1")

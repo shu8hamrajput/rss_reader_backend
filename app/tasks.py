@@ -56,7 +56,7 @@ def _cluster_stories(db, articles: list[Article]) -> None:
     nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
         Article.published_at >= since,
         Article.id.notin_([a.id for a in articles]),
-    ).all()
+    ).limit(5000).all()
 
     # Build lookup: {id: (title_tokens, cluster_id)}
     existing: list[tuple[int, set[str], str | None]] = [
@@ -270,8 +270,11 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
     for wh in webhooks:
         try:
             events = json.loads(wh.events or "[]")
-        except Exception as exc:
-            logger.warning("Could not parse webhook events for webhook %d: %s", wh.id, exc)
+        except (json.JSONDecodeError, ValueError):
+            logger.error(
+                "Webhook %d has malformed events JSON: %r",
+                wh.id, wh.events, exc_info=True
+            )
             events = []
         if event not in events:
             continue
