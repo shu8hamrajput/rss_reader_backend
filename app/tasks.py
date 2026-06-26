@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -80,7 +80,17 @@ def _cluster_stories(db, articles: list[Article]) -> None:
 
         if best_cluster:
             article.story_cluster_id = best_cluster
-            # Also update the matched existing articles that don't have a cluster yet
+            # Persist cluster_id to existing unclustered articles that matched —
+            # previously only the in-memory list was updated, leaving those rows
+            # with story_cluster_id=NULL in the DB.
+            newly_clustered_ids = [
+                eid for eid, etokens, ecluster in existing
+                if not ecluster and _jaccard(tokens, etokens) > 0.39
+            ]
+            if newly_clustered_ids:
+                db.query(Article).filter(Article.id.in_(newly_clustered_ids)).update(
+                    {"story_cluster_id": best_cluster}, synchronize_session=False
+                )
             existing = [
                 (eid, etokens, best_cluster if _jaccard(tokens, etokens) > 0.39 and not ecluster else ecluster)
                 for eid, etokens, ecluster in existing
@@ -104,7 +114,8 @@ def _tag_list(article: Article) -> list[str]:
     try:
         parsed = json.loads(article.tags)
         return parsed if isinstance(parsed, list) else []
-    except Exception:
+    except Exception as exc:
+        logger.debug("Could not parse tags for article %d: %s", article.id, exc)
         return []
 
 
@@ -259,7 +270,8 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
     for wh in webhooks:
         try:
             events = json.loads(wh.events or "[]")
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not parse webhook events for webhook %d: %s", wh.id, exc)
             events = []
         if event not in events:
             continue
@@ -277,7 +289,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ──────────────────────────────────────────────────────────────
+# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -445,11 +457,11 @@ def _generate_candidate(db, candidate: "GeneratedCandidate", url: str, use_llm: 
         candidate.completed_at = datetime.now(timezone.utc)
         db.commit()
     except Exception as exc:
-        logger.error("parser_gen candidate %d failed: %s", candidate.id, exc, exc_info=True)
         candidate.status = "failed"
         candidate.error = str(exc)[:500]
         candidate.completed_at = datetime.now(timezone.utc)
         db.commit()
+        raise
 
 
 @celery_app.task(name="app.tasks.generate_fetcher_candidate")
