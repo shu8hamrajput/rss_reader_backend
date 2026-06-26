@@ -2,7 +2,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -42,13 +42,21 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip("/").lower()
 
 
-def _build_response(collection: Collection, current_user: User, db: Session) -> CollectionResponse:
-    is_subscribed = (
-        db.query(CollectionSubscription)
-        .filter(CollectionSubscription.collection_id == collection.id, CollectionSubscription.user_id == current_user.id)
-        .first()
-        is not None
-    )
+def _get_subscribed_collection_ids(user_id: int, db: Session) -> set[int]:
+    rows = db.query(CollectionSubscription.collection_id).filter(CollectionSubscription.user_id == user_id).all()
+    return {r.collection_id for r in rows}
+
+
+def _build_response(collection: Collection, current_user: User, db: Session, subscribed_ids: set[int] | None = None) -> CollectionResponse:
+    if subscribed_ids is not None:
+        is_subscribed = collection.id in subscribed_ids
+    else:
+        is_subscribed = (
+            db.query(CollectionSubscription)
+            .filter(CollectionSubscription.collection_id == collection.id, CollectionSubscription.user_id == current_user.id)
+            .first()
+            is not None
+        )
     data = CollectionResponse.model_validate(collection)
     data.owner_name = collection.owner.name
     data.is_subscribed = is_subscribed
@@ -113,11 +121,14 @@ def list_my_collections(
 ):
     collections = (
         db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .filter(Collection.owner_id == current_user.id)
         .order_by(Collection.created_at.desc())
+        .limit(200)
         .all()
     )
-    return [_build_response(c, current_user, db) for c in collections]
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
+    return [_build_response(c, current_user, db, subscribed_ids) for c in collections]
 
 
 @router.get("/subscribed", response_model=list[CollectionResponse], summary="List collections you're subscribed to")
@@ -127,12 +138,15 @@ def list_subscribed_collections(
 ):
     collections = (
         db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .join(CollectionSubscription, CollectionSubscription.collection_id == Collection.id)
         .filter(CollectionSubscription.user_id == current_user.id)
         .order_by(CollectionSubscription.subscribed_at.desc())
+        .limit(200)
         .all()
     )
-    return [_build_response(c, current_user, db) for c in collections]
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
+    return [_build_response(c, current_user, db, subscribed_ids) for c in collections]
 
 
 @router.get("/discover", response_model=CollectionListResponse, summary="Discover public collections")
@@ -143,7 +157,7 @@ def discover_collections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Collection).filter(Collection.is_public == True)
+    q = db.query(Collection).options(selectinload(Collection.owner), selectinload(Collection.items)).filter(Collection.is_public == True)
     if search:
         term = f"%{search}%"
         q = q.filter(or_(Collection.name.ilike(term), Collection.description.ilike(term)))
@@ -155,9 +169,10 @@ def discover_collections(
         .limit(page_size)
         .all()
     )
+    subscribed_ids = _get_subscribed_collection_ids(current_user.id, db)
     return CollectionListResponse(
         total=total, page=page, page_size=page_size,
-        items=[_build_response(c, current_user, db) for c in items],
+        items=[_build_response(c, current_user, db, subscribed_ids) for c in items],
     )
 
 
@@ -269,9 +284,10 @@ async def subscribe_collection(
     if existing:
         return CollectionSubscribeResult(subscribed=True, feeds_added=0)
 
-    existing_urls = {
-        _normalize_url(f.url) for f in db.query(Feed).filter(Feed.user_id == current_user.id).all()
-    }
+    # Project only Feed.url — loading full Feed ORM objects (title, description,
+    # etag, icon_url, …) just to build a URL set wastes bandwidth and memory.
+    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).all()
+    existing_urls = {_normalize_url(r.url) for r in url_rows}
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
     feed_count = len(existing_urls)
     feeds_added = 0
