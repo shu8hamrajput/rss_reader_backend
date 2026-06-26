@@ -270,8 +270,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
     for wh in webhooks:
         try:
             events = json.loads(wh.events or "[]")
-        except Exception as exc:
-            logger.warning("Could not parse events for webhook %d: %s", wh.id, exc)
+        except Exception:
             events = []
         if event not in events:
             continue
@@ -289,7 +288,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ───────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -337,6 +336,7 @@ def refresh_all_feeds() -> None:
                 db.commit()
             except Exception as exc:
                 logger.warning("Failed to refresh URL %s: %s", url, exc)
+                db.rollback()
                 for feed in feed_group:
                     feed.fetch_failure_count += 1
                 db.commit()
@@ -381,6 +381,7 @@ def refresh_feed_by_id(feed_id: int) -> int:
             return new_count
         except Exception as exc:
             logger.warning("Failed to refresh feed %d: %s", feed_id, exc)
+            db.rollback()
             feed.fetch_failure_count += 1
             db.commit()
             return 0
