@@ -10,7 +10,12 @@ router = APIRouter(prefix="/categories", tags=["Categories"])
 
 
 def _owned_category(category_id: int, user: User, db: Session) -> Category:
-    cat = db.query(Category).filter(Category.id == category_id, Category.user_id == user.id).first()
+    cat = (
+        db.query(Category)
+        .options(selectinload(Category.feeds))
+        .filter(Category.id == category_id, Category.user_id == user.id)
+        .first()
+    )
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
     return cat
@@ -87,7 +92,7 @@ def update_category(
         raise HTTPException(status_code=409, detail="Category name already exists")
     cat.name = payload.name
     db.commit()
-    db.refresh(cat)
+    cat = _owned_category(category_id, current_user, db)
     return _to_response(cat)
 
 
@@ -124,7 +129,7 @@ def add_feed_to_category(
     if feed not in cat.feeds:
         cat.feeds.append(feed)
         db.commit()
-        db.refresh(cat)
+        cat = _owned_category(category_id, current_user, db)
     return _to_response(cat)
 
 

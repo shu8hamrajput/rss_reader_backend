@@ -1,7 +1,11 @@
+import logging
+
 import httpx
 
 from ._common import clean_soup, strip_and_select
 from ..url_safety import assert_public_url
+
+logger = logging.getLogger(__name__)
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
 
@@ -33,5 +37,6 @@ async def fetch(url: str) -> str | None:
             resp = await client.get(url, headers=_HEADERS)
             resp.raise_for_status()
         return extract_content(resp.text)
-    except Exception:
+    except Exception as exc:
+        logger.debug("fetch_full_content failed for %s: %s", url, exc)
         return None

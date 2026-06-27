@@ -212,7 +212,7 @@ def update_collection(
     if payload.is_public is not None:
         collection.is_public = payload.is_public
     db.commit()
-    db.refresh(collection)
+    collection = _owned_collection(collection_id, current_user, db)
     return _build_response(collection, current_user, db)
 
 
@@ -294,8 +294,6 @@ async def subscribe_collection(
     if existing:
         return CollectionSubscribeResult(subscribed=True, feeds_added=0)
 
-    # Project only Feed.url — loading full Feed ORM objects (title, description,
-    # etag, icon_url, …) just to build a URL set wastes bandwidth and memory.
     url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).limit(10_000).all()
     existing_urls = {_normalize_url(r.url) for r in url_rows}
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
