@@ -1,7 +1,10 @@
 import io
 import json
+import logging
 import re
 import zipfile
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -33,7 +36,8 @@ def _parse_tags(raw) -> list[str]:
         try:
             parsed = json.loads(raw)
             tags = parsed if isinstance(parsed, list) else []
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to parse tags JSON %r: %s", raw, exc)
             return []
     return [t for t in tags if t not in _SYSTEM_TAGS]
 

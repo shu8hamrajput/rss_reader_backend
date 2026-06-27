@@ -1,7 +1,10 @@
 import hmac
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -100,5 +103,6 @@ def verify_oauth_state(state: str) -> bool:
         token, sig = state.rsplit(".", 1)
         expected = hmac.new(settings.jwt_secret_key.encode(), token.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(sig, expected)
-    except Exception:
+    except Exception as exc:
+        logger.debug("OAuth state verification failed: %s", exc)
         return False

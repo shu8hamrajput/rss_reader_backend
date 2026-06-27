@@ -15,6 +15,7 @@ Supported search indexes:
                   set YOUTUBE_API_KEY in env (YouTube Data API v3).
 """
 import hashlib
+import logging
 import os
 import re
 import time
@@ -23,6 +24,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 from ..services.url_safety import assert_public_url
 from fastapi import APIRouter, HTTPException, Query
@@ -105,8 +108,8 @@ async def _resolve_youtube_url(url: str) -> str | None:
             channel_id = _extract_channel_id_from_html(resp.text)
             if channel_id:
                 return _yt_rss_url(channel_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("YouTube channel ID fetch failed for %s: %s", fetch_url, exc)
 
     return None
 

@@ -296,7 +296,7 @@ async def subscribe_collection(
 
     # Project only Feed.url — loading full Feed ORM objects (title, description,
     # etag, icon_url, …) just to build a URL set wastes bandwidth and memory.
-    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).all()
+    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).limit(10_000).all()
     existing_urls = {_normalize_url(r.url) for r in url_rows}
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
     feed_count = len(existing_urls)

@@ -1,9 +1,12 @@
 import asyncio
+import logging
 import re
 import feedparser
 import httpx
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -129,7 +132,8 @@ async def _fetch_youtube_transcript(video_id: str) -> str | None:
                     lines.append(text)
         text = " ".join(lines).strip()
         return text[:100_000] if text else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("YouTube transcript fetch failed for %s: %s", url, exc)
         return None
 
 
@@ -356,7 +360,8 @@ async def _fetch_transcript(url: str) -> str | None:
                 continue
             lines.append(line)
         return " ".join(lines)[:100_000] if lines else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Podcast transcript fetch failed for %s: %s", url, exc)
         return None
 
 
