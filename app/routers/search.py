@@ -15,6 +15,7 @@ Supported search indexes:
                   set YOUTUBE_API_KEY in env (YouTube Data API v3).
 """
 import hashlib
+import logging
 import os
 import re
 import time
@@ -34,11 +35,13 @@ from ..schemas import (
     FeedSearchResult,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/search", tags=["Search"])
 
 _HEADERS = {"User-Agent": "RSSReader/1.0 (+https://github.com)"}
 
-# ── YouTube helpers (no API key required) ─────────────────────────────────────
+# ── YouTube helpers (no API key required) ──────────────────────────────────────────────
 
 _YT_CHANNEL_RE = re.compile(
     r"youtube\.com/(?:channel/|(c/|user/|@))([\w@.-]+)", re.IGNORECASE
@@ -105,8 +108,8 @@ async def _resolve_youtube_url(url: str) -> str | None:
             channel_id = _extract_channel_id_from_html(resp.text)
             if channel_id:
                 return _yt_rss_url(channel_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not resolve YouTube URL %s: %s", fetch_url, exc)
 
     return None
 
@@ -389,7 +392,7 @@ async def _search_youtube(q: str, limit: int) -> FeedSearchResponse:
     return FeedSearchResponse(query=q, results=results)
 
 
-# ── Feed search endpoint ──────────────────────────────────────────────────────
+# ── Feed search endpoint ─────────────────────────────────────────────────────
 
 @router.get(
     "/feeds",
@@ -422,7 +425,7 @@ async def search_feeds(
         return await _search_youtube(q, limit)
 
 
-# ── Website feed discovery ────────────────────────────────────────────────────
+# ── Website feed discovery ──────────────────────────────────────────────────────────
 
 # Mime types that indicate RSS/Atom/JSON feed links in <link> tags
 _FEED_MIME_TYPES = {
@@ -470,6 +473,8 @@ async def discover_feeds(
     if "youtube.com" in parsed.netloc or "youtu.be" in parsed.netloc:
         rss_url = await _resolve_youtube_url(url)
         if rss_url:
+            channel_id_m = re.search(r"channel_id=(UC[\w-]{22})", rss_url)
+            channel_id = channel_id_m.group(1) if channel_id_m else None
             return FeedDiscoverResponse(source_url=url, feeds=[DiscoveredFeed(
                 feed_url=rss_url,
                 title="YouTube channel",

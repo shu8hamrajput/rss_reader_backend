@@ -75,8 +75,8 @@ def _fts_ids(search: str, db: Session) -> list[int] | None:
             {"q": search, "lim": _FTS_ID_LIMIT},
         ).fetchall()
         return [r[0] for r in rows]
-    except Exception:
-        logger.warning("FTS search failed for query %r, falling back to ILIKE", search, exc_info=True)
+    except Exception as exc:
+        logger.warning("FTS search failed, falling back to ILIKE: %s", exc)
         db.rollback()  # Postgres aborts the transaction on error — must roll back before reuse
         return None  # search_vector not yet populated — fall back to ILIKE
 
@@ -115,7 +115,7 @@ def list_articles(
 
     if tag is not None:
         # JSON array contains the tag — simple LIKE match keeps this portable across SQLite/Postgres
-        q = q.filter(Article.tags.like(f'"%{tag}%"'))
+        q = q.filter(Article.tags.like(f'%"{tag}"%'))
 
     if has_audio:
         q = q.filter(or_(Article.media_type.like('audio/%'), Article.media_type == 'video/youtube'))
