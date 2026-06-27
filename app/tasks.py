@@ -270,7 +270,8 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
     for wh in webhooks:
         try:
             events = json.loads(wh.events or "[]")
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to parse webhook events for webhook %d: %s", wh.id, exc)
             events = []
         if event not in events:
             continue

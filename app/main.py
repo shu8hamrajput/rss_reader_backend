@@ -214,6 +214,8 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_parser_requests_article_id ON parser_requests (article_id)",
             # Partial index for newly imported feeds pending first fetch
             "CREATE INDEX IF NOT EXISTS ix_feeds_last_fetched_at_null ON feeds (last_fetched_at) WHERE last_fetched_at IS NULL",
+            # Partial index for active feeds — used by refresh_all_feeds task and list_feeds
+            "CREATE INDEX IF NOT EXISTS ix_feeds_is_active ON feeds (is_active) WHERE is_active = TRUE",
         ]
         for stmt in stmts:
             try:
