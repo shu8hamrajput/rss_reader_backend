@@ -1,8 +1,8 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..auth import get_current_user
 from ..config import settings
@@ -84,7 +84,7 @@ def create_highlight(
     # Fire webhooks for highlight_created event
     try:
         from ..tasks import _fire_webhooks_sync
-        article = db.query(Article).filter(Article.id == article_id).first()
+        article = db.query(Article).options(defer(Article.content), defer(Article.full_content), defer(Article.search_vector)).filter(Article.id == article_id).first()
         _fire_webhooks_sync(db, current_user.id, "highlight_created", {
             "highlight_id": h.id,
             "article_id": article_id,
@@ -96,6 +96,7 @@ def create_highlight(
         })
     except Exception as exc:
         logger.warning("Webhook fire failed for highlight %s: %s", h.id, exc)
+    db.commit()
     return h
 
 
@@ -141,23 +142,15 @@ def delete_highlight(
     summary="Get highlights due for spaced-repetition review",
     description=(
         "Returns up to `limit` highlights ordered by reviewed_at ASC NULLS FIRST "
-        "(never-reviewed first, then oldest-reviewed). Heavier highlights "
-        "(color_id 3 or 4) are weighted as if reviewed 7 days earlier."
+        "(never-reviewed first, then oldest-reviewed)."
     ),
 )
 def get_review_queue(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from datetime import datetime, timedelta, timezone as _tz
-    from sqlalchemy import case, nullsfirst
-    now = datetime.now(_tz.utc)
-    # Score: reviewed_at + bonus for high-color highlights (review them less often)
-    score_expr = case(
-        (Highlight.reviewed_at.is_(None), (now - timedelta(days=9999)).replace(tzinfo=None)),
-        else_=Highlight.reviewed_at,
-    )
+    from sqlalchemy import nullsfirst
     rows = (
         db.query(
             Highlight,
@@ -272,9 +265,9 @@ async def generate_anki_question(
     row = db.query(Article.title).filter(Article.id == h.article_id).first()
     article_title = row.title if row else "Unknown article"
 
-    from anthropic import AsyncAnthropic
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    message = await client.messages.create(
+    from anthropic import Anthropic
+    client = Anthropic(api_key=settings.anthropic_api_key)
+    message = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=128,
         system=(
