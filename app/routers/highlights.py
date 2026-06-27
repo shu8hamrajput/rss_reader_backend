@@ -96,6 +96,7 @@ def create_highlight(
         })
     except Exception as exc:
         logger.warning("Webhook fire failed for highlight %s: %s", h.id, exc)
+    db.commit()
     return h
 
 
