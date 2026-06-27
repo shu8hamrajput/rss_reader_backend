@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -56,7 +56,7 @@ def _cluster_stories(db, articles: list[Article]) -> None:
     nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
         Article.published_at >= since,
         Article.id.notin_([a.id for a in articles]),
-    ).limit(2000).all()
+    ).limit(5000).all()
 
     # Build lookup: {id: (title_tokens, cluster_id)}
     existing: list[tuple[int, set[str], str | None]] = [
@@ -67,19 +67,15 @@ def _cluster_stories(db, articles: list[Article]) -> None:
     for article in articles:
         tokens = _tokenize(article.title or "")
         best_cluster: str | None = None
-        best_clustered_score = 0.39  # prefer highest-scoring article that already has a cluster
-        any_unclustered_match = False  # true if any unclustered article scored above threshold
+        best_score = 0.39  # threshold
 
         for _, etokens, ecluster in existing:
             score = _jaccard(tokens, etokens)
-            if score > 0.39:
-                if ecluster and score > best_clustered_score:
-                    best_clustered_score = score
-                    best_cluster = ecluster
-                elif not ecluster:
-                    any_unclustered_match = True
+            if score > best_score:
+                best_score = score
+                best_cluster = ecluster
 
-        if best_cluster is None and any_unclustered_match:
+        if best_cluster is None and best_score > 0.39:
             best_cluster = str(uuid.uuid4())
 
         if best_cluster:
@@ -275,7 +271,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
         try:
             events = json.loads(wh.events or "[]")
         except Exception as exc:
-            logger.warning("Webhook %d: could not parse events JSON, skipping: %s", wh.id, exc)
+            logger.debug("Failed to parse webhook events for webhook %d: %s", wh.id, exc)
             events = []
         if event not in events:
             continue
@@ -286,14 +282,13 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             headers["X-RSS-Signature"] = f"sha256={sig}"
         try:
             # Fire-and-forget sync; failures are logged and do not block the task
-            import httpx as _httpx
-            _httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
+            httpx.post(wh.url, content=body, headers=headers, timeout=5.0)
             wh.last_fired_at = datetime.now(timezone.utc)
         except Exception as exc:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -341,10 +336,11 @@ def refresh_all_feeds() -> None:
                 db.commit()
             except Exception as exc:
                 logger.warning("Failed to refresh URL %s: %s", url, exc)
-                db.rollback()
                 for feed in feed_group:
                     feed.fetch_failure_count += 1
                 db.commit()
+    except Exception as exc:
+        logger.error("refresh_all_feeds task failed: %s", exc, exc_info=True)
     finally:
         db.close()
 
@@ -386,10 +382,12 @@ def refresh_feed_by_id(feed_id: int) -> int:
             return new_count
         except Exception as exc:
             logger.warning("Failed to refresh feed %d: %s", feed_id, exc)
-            db.rollback()
             feed.fetch_failure_count += 1
             db.commit()
             return 0
+    except Exception as exc:
+        logger.error("refresh_feed_by_id task failed for feed %d: %s", feed_id, exc, exc_info=True)
+        return 0
     finally:
         db.close()
 
@@ -480,8 +478,5 @@ def generate_fetcher_candidate(candidate_id: int, url: str, use_llm: bool, sampl
         if not candidate:
             return
         _generate_candidate(db, candidate, url, use_llm, samples_n)
-    except Exception as exc:
-        logger.error("generate_fetcher_candidate failed for candidate %d: %s", candidate_id, exc)
-        raise
     finally:
         db.close()

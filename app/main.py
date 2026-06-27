@@ -214,9 +214,11 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_parser_requests_article_id ON parser_requests (article_id)",
             # Partial index for newly imported feeds pending first fetch
             "CREATE INDEX IF NOT EXISTS ix_feeds_last_fetched_at_null ON feeds (last_fetched_at) WHERE last_fetched_at IS NULL",
-            # Partial indexes for media type and in-progress podcast filter queries
+            # Partial index for active feeds — used by refresh_all_feeds task and list_feeds
+            "CREATE INDEX IF NOT EXISTS ix_feeds_is_active ON feeds (is_active) WHERE is_active = TRUE",
+            # Indexes for podcast and in-progress filters
             "CREATE INDEX IF NOT EXISTS ix_articles_media_type ON articles (media_type) WHERE media_type IS NOT NULL",
-            "CREATE INDEX IF NOT EXISTS ix_articles_in_progress ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL AND resume_at_seconds > 0",
+            "CREATE INDEX IF NOT EXISTS ix_articles_resume_at_seconds ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL",
         ]
         for stmt in stmts:
             try:
@@ -264,8 +266,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth.router,       prefix="/api/v1")

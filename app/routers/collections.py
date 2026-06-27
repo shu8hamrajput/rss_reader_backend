@@ -68,8 +68,8 @@ def _build_response(collection: Collection, current_user: User, db: Session, sub
 def _owned_collection(collection_id: int, user: User, db: Session) -> Collection:
     collection = (
         db.query(Collection)
-        .filter(Collection.id == collection_id, Collection.owner_id == user.id)
         .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .filter(Collection.id == collection_id, Collection.owner_id == user.id)
         .first()
     )
     if not collection:
@@ -80,8 +80,8 @@ def _owned_collection(collection_id: int, user: User, db: Session) -> Collection
 def _visible_collection(collection_id: int, user: User, db: Session) -> Collection:
     collection = (
         db.query(Collection)
-        .filter(Collection.id == collection_id)
         .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .filter(Collection.id == collection_id)
         .first()
     )
     if not collection or (not collection.is_public and collection.owner_id != user.id):
@@ -131,8 +131,8 @@ def list_my_collections(
 ):
     collections = (
         db.query(Collection)
-        .filter(Collection.owner_id == current_user.id)
         .options(selectinload(Collection.owner), selectinload(Collection.items))
+        .filter(Collection.owner_id == current_user.id)
         .order_by(Collection.created_at.desc())
         .limit(200)
         .all()
@@ -148,9 +148,9 @@ def list_subscribed_collections(
 ):
     collections = (
         db.query(Collection)
+        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .join(CollectionSubscription, CollectionSubscription.collection_id == Collection.id)
         .filter(CollectionSubscription.user_id == current_user.id)
-        .options(selectinload(Collection.owner), selectinload(Collection.items))
         .order_by(CollectionSubscription.subscribed_at.desc())
         .limit(200)
         .all()
@@ -167,15 +167,14 @@ def discover_collections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Collection).filter(Collection.is_public == True)
+    q = db.query(Collection).options(selectinload(Collection.owner), selectinload(Collection.items)).filter(Collection.is_public == True)
     if search:
         term = f"%{search}%"
         q = q.filter(or_(Collection.name.ilike(term), Collection.description.ilike(term)))
 
     total = q.count()
     items = (
-        q.options(selectinload(Collection.owner), selectinload(Collection.items))
-        .order_by(Collection.subscriber_count.desc(), Collection.created_at.desc())
+        q.order_by(Collection.subscriber_count.desc(), Collection.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -213,7 +212,7 @@ def update_collection(
     if payload.is_public is not None:
         collection.is_public = payload.is_public
     db.commit()
-    db.refresh(collection)
+    collection = _owned_collection(collection_id, current_user, db)
     return _build_response(collection, current_user, db)
 
 
@@ -280,7 +279,7 @@ def remove_collection_item(
 
 
 @router.post("/{collection_id}/subscribe", response_model=CollectionSubscribeResult, summary="Subscribe to a collection")
-async def subscribe_collection(
+def subscribe_collection(
     collection_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -295,9 +294,7 @@ async def subscribe_collection(
     if existing:
         return CollectionSubscribeResult(subscribed=True, feeds_added=0)
 
-    # Project only Feed.url — loading full Feed ORM objects (title, description,
-    # etag, icon_url, …) just to build a URL set wastes bandwidth and memory.
-    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).all()
+    url_rows = db.query(Feed.url).filter(Feed.user_id == current_user.id).limit(10_000).all()
     existing_urls = {_normalize_url(r.url) for r in url_rows}
     max_feeds = limits_for(effective_plan(current_user)).max_feeds
     feed_count = len(existing_urls)
