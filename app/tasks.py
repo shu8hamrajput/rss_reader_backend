@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -196,10 +196,10 @@ def _apply_rule_actions(article: Article, actions: list[dict]) -> None:
                 article.tags = json.dumps(tags)
 
 
-def _apply_rules(db, user_id: int, articles: list[Article]) -> None:
+def _apply_rules(db, user_id: int, articles: list[Article], cached_rules: list | None = None) -> None:
     if not articles:
         return
-    rules = (
+    rules = cached_rules if cached_rules is not None else (
         db.query(ArticleRule)
         .filter(ArticleRule.user_id == user_id, ArticleRule.is_active == True)
         .order_by(ArticleRule.order, ArticleRule.id)
@@ -215,9 +215,9 @@ def _apply_rules(db, user_id: int, articles: list[Article]) -> None:
                 rule.match_count = (rule.match_count or 0) + 1
 
 
-def _match_alerts(db, feed_id: int, user_id: int, since: datetime) -> None:
+def _match_alerts(db, feed_id: int, user_id: int, since: datetime, cached_alerts: list | None = None) -> None:
     """Check newly ingested articles against the user's search alerts and publish matches."""
-    alerts = db.query(SearchAlert).filter(SearchAlert.user_id == user_id).all()
+    alerts = cached_alerts if cached_alerts is not None else db.query(SearchAlert).filter(SearchAlert.user_id == user_id).all()
     if not alerts:
         return
     for alert in alerts:
@@ -288,7 +288,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -305,6 +305,21 @@ def refresh_all_feeds() -> None:
             "Celery beat: refreshing %d unique URL(s) across %d active feed(s)",
             len(url_groups), len(feeds),
         )
+
+        # Pre-fetch rules and alerts per user to avoid repeated identical queries
+        # when multiple feeds of the same user refresh in the same beat cycle.
+        user_ids = {feed.user_id for feed in feeds}
+        rules_by_user: dict[int, list] = {
+            uid: db.query(ArticleRule)
+                .filter(ArticleRule.user_id == uid, ArticleRule.is_active == True)
+                .order_by(ArticleRule.order, ArticleRule.id)
+                .all()
+            for uid in user_ids
+        }
+        alerts_by_user: dict[int, list] = {
+            uid: db.query(SearchAlert).filter(SearchAlert.user_id == uid).all()
+            for uid in user_ids
+        }
 
         for url, feed_group in url_groups.items():
             try:
@@ -323,12 +338,12 @@ def refresh_all_feeds() -> None:
                             Article.created_at >= before_refresh,
                         ).all()
                         _cluster_stories(db, new_articles)
-                        _apply_rules(db, feed.user_id, new_articles)
+                        _apply_rules(db, feed.user_id, new_articles, rules_by_user.get(feed.user_id))
                         publish(
                             feed.user_id,
                             {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                         )
-                        _match_alerts(db, feed.id, feed.user_id, before_refresh)
+                        _match_alerts(db, feed.id, feed.user_id, before_refresh, alerts_by_user.get(feed.user_id))
                         _fire_webhooks_sync(db, feed.user_id, "new_article", {
                             "feed_id": feed.id,
                             "count": new_count,
