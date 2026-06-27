@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 _MAX_OPML_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
-# ── Import ─────────────────────────────────────────────────────────────────────────────
+# ── Import ──────────────────────────────────────────────────────────────────────────────────────
 
 def _iter_outlines(element: ET.Element, folder: str | None = None):
     """Yield (xml_url, title, folder) tuples from nested OPML outlines."""
@@ -118,7 +118,7 @@ async def import_opml(
     return OPMLImportResult(added=added, skipped=skipped, failed=failed, errors=errors)
 
 
-# ── Export ────────────────────────────────────────────────────────────────────────────
+# ── Export ────────────────────────────────────────────────────────────────────────────────────
 
 @router.get(
     "/export",
@@ -130,11 +130,12 @@ def export_opml(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    feeds = db.query(Feed).filter(Feed.user_id == current_user.id).all()
+    feeds = db.query(Feed).filter(Feed.user_id == current_user.id).limit(10_000).all()
     categories = (
         db.query(Category)
         .options(selectinload(Category.feeds))
         .filter(Category.user_id == current_user.id)
+        .limit(10_000)
         .all()
     )
 
@@ -188,7 +189,7 @@ def export_opml(
     )
 
 
-# ── YouTube subscriptions CSV import ─────────────────────────────────────────────────────
+# ── YouTube subscriptions CSV import ──────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/import-youtube",
