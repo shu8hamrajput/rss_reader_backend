@@ -269,7 +269,7 @@ def get_reading_stats(
 
 
 # System-managed tags that users should not overwrite via the tags endpoint
-_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
+_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "listen_later", "read", "unread"})
 
 
 @router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")

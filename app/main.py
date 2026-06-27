@@ -216,6 +216,9 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_feeds_last_fetched_at_null ON feeds (last_fetched_at) WHERE last_fetched_at IS NULL",
             # Partial index for active feeds — used by refresh_all_feeds task and list_feeds
             "CREATE INDEX IF NOT EXISTS ix_feeds_is_active ON feeds (is_active) WHERE is_active = TRUE",
+            # Indexes for podcast and in-progress filters
+            "CREATE INDEX IF NOT EXISTS ix_articles_media_type ON articles (media_type) WHERE media_type IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_articles_resume_at_seconds ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL",
         ]
         for stmt in stmts:
             try:

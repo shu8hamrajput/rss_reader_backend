@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..auth import get_current_user
 from ..config import settings
@@ -84,7 +84,7 @@ def create_highlight(
     # Fire webhooks for highlight_created event
     try:
         from ..tasks import _fire_webhooks_sync
-        article = db.query(Article).filter(Article.id == article_id).first()
+        article = db.query(Article).options(defer(Article.content), defer(Article.full_content), defer(Article.search_vector)).filter(Article.id == article_id).first()
         _fire_webhooks_sync(db, current_user.id, "highlight_created", {
             "highlight_id": h.id,
             "article_id": article_id,
