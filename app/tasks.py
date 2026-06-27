@@ -29,7 +29,7 @@ from .services.fetchers._common import strip_and_select
 logger = logging.getLogger(__name__)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set[str]:
     """Lowercase alphanumeric tokens, length >= 3, for Jaccard similarity."""
@@ -73,6 +73,11 @@ def _cluster_stories(db, articles: list[Article]) -> None:
             score = _jaccard(tokens, etokens)
             if score > best_score:
                 best_score = score
+                if ecluster:
+                    best_cluster = ecluster
+            elif score > 0.39 and best_cluster is None and ecluster:
+                # Lower-scoring but above-threshold match with an existing cluster —
+                # use it as fallback so we join rather than fragment.
                 best_cluster = ecluster
 
         if best_cluster is None and best_score > 0.39:
@@ -288,7 +293,7 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
             logger.warning("Webhook %d delivery failed: %s", wh.id, exc)
 
 
-# ── Celery tasks ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Celery tasks ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
@@ -493,7 +498,5 @@ def generate_fetcher_candidate(candidate_id: int, url: str, use_llm: bool, sampl
         if not candidate:
             return
         _generate_candidate(db, candidate, url, use_llm, samples_n)
-    except Exception as exc:
-        logger.error("generate_fetcher_candidate task failed for candidate %d: %s", candidate_id, exc, exc_info=True)
     finally:
         db.close()
