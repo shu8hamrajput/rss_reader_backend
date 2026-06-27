@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm.attributes import set_committed_value
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -154,7 +155,14 @@ def list_articles(
     )
     rows = q_paged.all()
     total = rows[0]._total if rows else 0
-    items = [ArticleResponse.model_validate(row.Article) for row in rows]
+    items = []
+    for row in rows:
+        # Pre-fill deferred large-text columns so Pydantic validation doesn't
+        # trigger a per-row lazy SELECT (N+1). List cards don't need these fields;
+        # the reader fetches them via GET /articles/{id}.
+        set_committed_value(row.Article, 'content', None)
+        set_committed_value(row.Article, 'full_content', None)
+        items.append(ArticleResponse.model_validate(row.Article))
 
     return ArticleListResponse(
         total=total, page=page, page_size=page_size, items=items,
