@@ -78,6 +78,10 @@ async def import_opml(
     errors: list[str] = []
     category_cache: dict[str, Category] = {}
 
+    from ..services.plans import effective_plan, limits_for
+    plan_limits = limits_for(effective_plan(current_user))
+    current_count = db.query(func.count(Feed.id)).filter(Feed.user_id == current_user.id).scalar() or 0
+
     for xml_url, title, folder_name in _iter_outlines(body):
         # Resolve or create category
         cat: Category | None = None
@@ -100,6 +104,11 @@ async def import_opml(
         if existing:
             skipped += 1
             continue
+
+        # Plan feed-count limit
+        if plan_limits.max_feeds is not None and current_count + added >= plan_limits.max_feeds:
+            errors.append("Plan feed limit reached — remaining feeds skipped")
+            break
 
         feed = Feed(url=xml_url, title=title, user_id=current_user.id)
         if cat:
@@ -189,7 +198,7 @@ def export_opml(
     )
 
 
-# ── YouTube subscriptions CSV import ──────────────────────────────────────────────────────────────────────────────
+# ── YouTube subscriptions CSV import ────────────────────────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/import-youtube",
