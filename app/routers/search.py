@@ -41,6 +41,85 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 _HEADERS = {"User-Agent": "RSSReader/1.0 (+https://github.com)"}
 
+# ── Search index metadata (drives the frontend picker) ────────────────────────
+
+_SEARCH_INDEXES = [
+    {
+        "id":          "feedly",
+        "name":        "Feedly",
+        "description": "40M+ RSS feeds — blogs, newsletters, news",
+        "category":    "general",
+        "icon":        "🔍",
+        "requires_key": False,
+        "placeholder": "e.g. python, tech news, startup",
+    },
+    {
+        "id":          "youtube",
+        "name":        "YouTube",
+        "description": "Find channels by name or paste @handle / channel URL",
+        "category":    "video",
+        "icon":        "▶️",
+        "requires_key": False,
+        "placeholder": "e.g. Lex Fridman, @fireship",
+    },
+    {
+        "id":          "itunes",
+        "name":        "Apple Podcasts",
+        "description": "Apple's podcast catalog — largest index, no key needed",
+        "category":    "podcast",
+        "icon":        "🎙️",
+        "requires_key": False,
+        "placeholder": "e.g. Software Engineering Daily",
+    },
+    {
+        "id":          "podcast_index",
+        "name":        "Podcast Index",
+        "description": "Open, censorship-resistant podcast database",
+        "category":    "podcast",
+        "icon":        "📡",
+        "requires_key": True,
+        "requires_key_hint": "Free key at podcastindex.org/apps",
+        "placeholder": "e.g. indie podcast, tech",
+    },
+    {
+        "id":          "gpodder",
+        "name":        "gpodder",
+        "description": "Community podcast directory — no key needed",
+        "category":    "podcast",
+        "icon":        "🎧",
+        "requires_key": False,
+        "placeholder": "e.g. linux, security",
+    },
+    {
+        "id":          "fyyd",
+        "name":        "fyyd",
+        "description": "European podcast index — strong German & multilingual coverage",
+        "category":    "podcast",
+        "icon":        "🌍",
+        "requires_key": False,
+        "placeholder": "e.g. netzpolitik, technology",
+    },
+    {
+        "id":          "github",
+        "name":        "GitHub",
+        "description": "Paste a github.com/owner/repo URL to watch releases",
+        "category":    "dev",
+        "icon":        "🐙",
+        "requires_key": False,
+        "placeholder": "https://github.com/owner/repo",
+    },
+]
+
+
+@router.get("/indexes", summary="List available feed search indexes")
+def list_search_indexes():
+    """Return metadata for every search index the server supports.
+
+    The `requires_key` field indicates whether a server-side API key is needed.
+    Clients can use this list to build a dynamic source picker.
+    """
+    return _SEARCH_INDEXES
+
 # ── YouTube helpers (no API key required) ──────────────────────────────────────────────
 
 _YT_CHANNEL_RE = re.compile(
@@ -113,7 +192,7 @@ async def _resolve_youtube_url(url: str) -> str | None:
 
     return None
 
-SearchSource = Literal["feedly", "podcast_index", "itunes", "gpodder", "fyyd", "youtube"]
+SearchSource = Literal["feedly", "podcast_index", "itunes", "gpodder", "fyyd", "youtube", "github"]
 
 # ── Per-source fetch helpers ──────────────────────────────────────────────────
 
@@ -423,6 +502,21 @@ async def search_feeds(
         return await _search_fyyd(q, limit)
     if source == "youtube":
         return await _search_youtube(q, limit)
+    if source == "github":
+        # GitHub: treat the query as a repo URL and return its releases feed
+        from ..plugins.github import GitHubPlugin
+        gh = GitHubPlugin()
+        feed_url = gh.normalize_url(q.strip())
+        return FeedSearchResponse(
+            query=q,
+            results=[FeedSearchResult(
+                feed_url=feed_url,
+                title=q.strip().split("github.com/")[-1] if "github.com" in q else q,
+                description="GitHub releases feed",
+                website_url=q.strip() if q.strip().startswith("http") else None,
+                subscribers=None, language=None, cover_url=None, velocity=None,
+            )] if "github.com" in q else [],
+        )
 
 
 # ── Website feed discovery ──────────────────────────────────────────────────────────
