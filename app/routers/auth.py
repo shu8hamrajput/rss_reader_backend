@@ -12,7 +12,7 @@ After either flow the client receives a TokenResponse with a Bearer JWT.
 Every subsequent request must include:  Authorization: Bearer <token>
 """
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
@@ -146,12 +146,15 @@ def _require_google_config() -> None:
 )
 async def google_login(request: Request):
     _require_google_config()
-    # Embed the frontend origin (from Referer or Origin header) in the state so
-    # the callback can redirect back to wherever the user started — supports
-    # multiple Vercel deployments and localhost without a hardcoded FRONTEND_URL.
+    # Embed the frontend origin in the state so the callback redirects back to
+    # wherever the user started (supports multiple Vercel deployments / localhost).
+    def _origin_from_url(url: str) -> str:
+        p = urlparse(url)
+        return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
+
     frontend_origin = (
         request.headers.get("origin")
-        or request.headers.get("referer", "").rstrip("/").rsplit("/", 1)[0]
+        or _origin_from_url(request.headers.get("referer", ""))
         or settings.frontend_url
     )
     state = generate_oauth_state(frontend_origin)
