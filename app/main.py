@@ -1,4 +1,5 @@
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -262,9 +263,17 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_STATIC_ORIGINS = {o.strip() for o in settings.cors_origins.split(",") if o.strip()}
+# Allow any Vercel deployment URL (preview + production) and localhost variants
+_VERCEL_RE = re.compile(r'^https://[a-zA-Z0-9\-]+\.vercel\.app$')
+
+def _is_allowed_origin(origin: str) -> bool:
+    return origin in _STATIC_ORIGINS or bool(_VERCEL_RE.match(origin))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_origins=list(_STATIC_ORIGINS),
+    allow_origin_regex=r'^https://[a-zA-Z0-9\-]+\.vercel\.app$',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

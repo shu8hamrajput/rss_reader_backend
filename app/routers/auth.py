@@ -19,7 +19,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, R
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from ..auth import create_access_token, generate_oauth_state, get_current_user, verify_oauth_state
+from ..auth import create_access_token, generate_oauth_state, get_current_user, verify_oauth_state, extract_frontend_origin_from_state
 from ..config import settings
 from ..database import get_db
 from ..models import User, UserPreferences, UserSession
@@ -144,12 +144,20 @@ def _require_google_config() -> None:
     response_class=RedirectResponse,
     status_code=302,
 )
-async def google_login(response: Response):
+async def google_login(request: Request):
     _require_google_config()
-    state = generate_oauth_state()
+    # Embed the frontend origin (from Referer or Origin header) in the state so
+    # the callback can redirect back to wherever the user started — supports
+    # multiple Vercel deployments and localhost without a hardcoded FRONTEND_URL.
+    frontend_origin = (
+        request.headers.get("origin")
+        or request.headers.get("referer", "").rstrip("/").rsplit("/", 1)[0]
+        or settings.frontend_url
+    )
+    state = generate_oauth_state(frontend_origin)
     url = _google_auth_url(settings.google_redirect_uri, state)
     redirect = RedirectResponse(url=url, status_code=302)
-    redirect.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
+    redirect.set_cookie("oauth_state", state, httponly=True, samesite="none", secure=True, max_age=600)
     return redirect
 
 
@@ -182,11 +190,15 @@ async def google_callback(
     db.commit()
     token_response = _build_token_response(user)
 
-    separator = '&' if '?' in settings.frontend_url else '?'
-    redirect_url = f"{settings.frontend_url}{separator}{urlencode({'token': token_response.access_token})}"
+    # Use the frontend origin embedded in the state (set at login time) so we
+    # redirect back to whichever deployment the user actually came from.
+    origin_from_state = extract_frontend_origin_from_state(state)
+    base_url = origin_from_state or settings.frontend_url
+    separator = '&' if '?' in base_url else '?'
+    redirect_url = f"{base_url}{separator}{urlencode({'token': token_response.access_token})}"
 
     redirect = RedirectResponse(url=redirect_url, status_code=302)
-    redirect.delete_cookie('oauth_state')
+    redirect.delete_cookie('oauth_state', samesite="none", secure=True)
     return redirect
 
 
