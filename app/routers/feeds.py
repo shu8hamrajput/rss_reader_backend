@@ -18,9 +18,24 @@ from ..schemas import (
 )
 from ..services.feed_parser import refresh_feed
 from ..services.plans import effective_plan, limits_for
+from ..plugins import plugin_registry
 
 router = APIRouter(prefix="/feeds", tags=["Feeds"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/plugins", tags=["Feeds"], summary="List available feed plugins")
+def list_plugins():
+    """Return metadata for all registered feed plugins."""
+    return [
+        {
+            "name":         p.name,
+            "display_name": p.display_name,
+            "description":  p.description,
+            "icon_emoji":   p.icon_emoji,
+        }
+        for p in plugin_registry.all_plugins
+    ]
 
 
 def _owned_feed(feed_id: int, user: User, db: Session) -> Feed:
@@ -99,17 +114,20 @@ async def create_feed(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from ..routers.search import _resolve_youtube_url
-
     feed_url = payload.url.strip()
 
-    # Auto-convert YouTube channel URLs to their RSS feed equivalent so users
-    # can paste youtube.com/@handle or youtube.com/channel/UCxxx directly.
-    if "youtube.com" in feed_url or "youtu.be" in feed_url:
+    # Let the matching plugin normalize the URL (e.g. YouTube channel page → RSS URL).
+    plugin = plugin_registry.get_plugin(feed_url)
+    normalized = plugin.normalize_url(feed_url)
+    if normalized != feed_url:
+        feed_url = normalized
+    elif plugin.name == "youtube" and not feed_url.startswith("https://www.youtube.com/feeds/"):
+        # YouTube plugin matched but couldn't normalize — try the old resolver as fallback.
+        from ..routers.search import _resolve_youtube_url
         rss = await _resolve_youtube_url(feed_url)
         if rss:
             feed_url = rss
-        elif not feed_url.startswith("https://www.youtube.com/feeds/"):
+        else:
             raise HTTPException(
                 status_code=422,
                 detail="Could not resolve YouTube channel ID. Paste the channel page URL (e.g. youtube.com/@handle).",

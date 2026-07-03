@@ -220,6 +220,9 @@ def _migrate() -> None:
             # Indexes for podcast and in-progress filters
             "CREATE INDEX IF NOT EXISTS ix_articles_media_type ON articles (media_type) WHERE media_type IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS ix_articles_resume_at_seconds ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL",
+            # Plugin system — track which plugin handles each feed
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS plugin_name VARCHAR(64)",
+            "CREATE INDEX IF NOT EXISTS ix_feeds_plugin_name ON feeds (plugin_name) WHERE plugin_name IS NOT NULL",
         ]
         for stmt in stmts:
             try:

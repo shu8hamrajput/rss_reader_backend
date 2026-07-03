@@ -102,6 +102,8 @@ class Feed(Base):
     health_snooze_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Rolling 7-day average articles/day — used for velocity anomaly detection
     articles_per_day_avg: Mapped[Optional[float]] = mapped_column(nullable=True)
+    # Which plugin handles this feed (set on first successful fetch)
+    plugin_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
