@@ -19,7 +19,7 @@ from email.utils import parsedate_to_datetime
 import feedparser
 import httpx
 
-from .base import FeedPlugin, ParsedArticle, ParsedFeed
+from .base import FeedPlugin, ParsedArticle, ParsedFeed, SearchResult, SearchSourceMeta
 from ..services.url_safety import assert_public_url
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,17 @@ class GitHubPlugin(FeedPlugin):
     display_name = "GitHub"
     description  = "GitHub releases, commits, issues and tags via Atom"
     icon_emoji   = "🐙"
+
+    search_sources = [
+        SearchSourceMeta(
+            id          = "github",
+            name        = "GitHub",
+            description = "Paste a github.com/owner/repo URL to watch releases",
+            category    = "dev",
+            icon        = "🐙",
+            placeholder = "https://github.com/owner/repo",
+        ),
+    ]
 
     def can_handle(self, url: str) -> bool:
         return bool(
@@ -126,6 +137,21 @@ class GitHubPlugin(FeedPlugin):
 
         result.articles = articles
         return result, resp.status_code
+
+    async def search(self, query: str, source_id: str, limit: int = 20, **kwargs) -> list[SearchResult]:
+        if "github.com" not in query:
+            return []
+        feed_url = self.normalize_url(query.strip())
+        repo = query.strip().split("github.com/")[-1].rstrip("/")
+        m = _GH_REPO_RE.search(query)
+        owner = m.group(1).split("/")[0] if m else None
+        return [SearchResult(
+            feed_url    = feed_url,
+            title       = repo,
+            description = "GitHub releases feed",
+            website_url = query.strip() if query.strip().startswith("http") else None,
+            cover_url   = f"https://avatars.githubusercontent.com/{owner}?size=64" if owner else None,
+        )]
 
 
 def _parse_date(entry: feedparser.FeedParserDict) -> datetime | None:

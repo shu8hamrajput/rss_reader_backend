@@ -19,7 +19,7 @@ from email.utils import parsedate_to_datetime
 import feedparser
 import httpx
 
-from .base import FeedPlugin, ParsedArticle, ParsedFeed
+from .base import DiscoveredFeed, FeedPlugin, ParsedArticle, ParsedFeed, SearchResult, SearchSourceMeta
 from ..services.url_safety import assert_public_url
 
 logger = logging.getLogger(__name__)
@@ -130,33 +130,166 @@ async def _fetch_transcript(video_id: str) -> str | None:
         return None
 
 
+_YT_CHANNEL_RE = re.compile(
+    r"youtube\.com/(?:channel/|(c/|user/|@))([\w@.-]+)", re.IGNORECASE
+)
+_HEADERS = {"User-Agent": "RSSReader/1.0"}
+
+
+def _yt_rss_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+
+def _extract_channel_id_from_html(html: str) -> str | None:
+    for pattern in [
+        r'"channelId"\s*:\s*"(UC[\w-]{22})"',
+        r'"externalChannelId"\s*:\s*"(UC[\w-]{22})"',
+        r'channel_id=(UC[\w-]{22})',
+    ]:
+        m = re.search(pattern, html)
+        if m:
+            return m.group(1)
+    return None
+
+
 class YouTubePlugin(FeedPlugin):
     name         = "youtube"
     display_name = "YouTube"
     description  = "YouTube channels and playlists via RSS"
     icon_emoji   = "▶️"
 
+    search_sources = [
+        SearchSourceMeta(
+            id          = "youtube",
+            name        = "YouTube",
+            description = "Find channels by name or paste @handle / channel URL",
+            category    = "video",
+            icon        = "▶️",
+            placeholder = "e.g. Lex Fridman, @fireship",
+        ),
+    ]
+
     def can_handle(self, url: str) -> bool:
         return "youtube.com/feeds/videos.xml" in url
 
     def normalize_url(self, url: str) -> str:
-        """Convert channel/playlist/video/handle URLs to the Atom feed URL."""
+        """Convert channel/playlist/video/handle URLs to the Atom feed URL.
+
+        For handles and video URLs that require a page fetch, returns the input
+        unchanged — callers must use resolve_url() for async resolution.
+        """
         if "youtube.com/feeds/videos.xml" in url:
             return url
-
-        # youtube.com/channel/UCxxx or /c/Name
         m = re.search(r"youtube\.com/channel/(UC[\w-]{22})", url)
         if m:
-            return f"https://www.youtube.com/feeds/videos.xml?channel_id={m.group(1)}"
-
-        # youtube.com/playlist?list=PLxxx
+            return _yt_rss_url(m.group(1))
         m = re.search(r"[?&]list=(PL[\w-]+)", url)
         if m:
             return f"https://www.youtube.com/feeds/videos.xml?playlist_id={m.group(1)}"
-
-        # @handle — need to resolve channel ID (best effort via webpage scrape)
-        # Returned as-is here; the feeds router calls normalize_url then validates.
         return url
+
+    async def resolve_url(self, url: str) -> str | None:
+        """Async resolution for handles and video URLs that need a page fetch.
+
+        Returns the RSS feed URL, or None if the channel ID couldn't be found.
+        """
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
+            return None
+
+        path = parsed.path.rstrip("/")
+
+        # Playlist — no fetch needed
+        pl_m = re.search(r"[?&]list=(PL[\w-]+)", parsed.query)
+        if pl_m:
+            return f"https://www.youtube.com/feeds/videos.xml?playlist_id={pl_m.group(1)}"
+
+        # Direct channel ID
+        m = re.match(r"^/channel/(UC[\w-]{22})$", path, re.IGNORECASE)
+        if m:
+            return _yt_rss_url(m.group(1))
+
+        # Handle / user / custom name / video → fetch page
+        if re.match(r"^/(@[\w.-]+|user/[\w.-]+|c/[\w.-]+|watch|shorts/[\w-]+)$", path, re.IGNORECASE) \
+                or "youtu.be" in parsed.netloc or "/watch" in path:
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=10.0, headers=_HEADERS) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                channel_id = _extract_channel_id_from_html(resp.text)
+                if channel_id:
+                    return _yt_rss_url(channel_id)
+            except Exception as exc:
+                logger.debug("YouTube channel ID fetch failed for %s: %s", url, exc)
+        return None
+
+    async def search(self, query: str, source_id: str, limit: int = 20, **kwargs) -> list[SearchResult]:
+        import os
+        q = query.strip()
+
+        # Keyless: @handle or youtube.com URL
+        maybe_url = (
+            q if q.startswith("http")
+            else f"https://www.youtube.com/{q}" if q.startswith("@")
+            else None
+        )
+        if maybe_url:
+            rss_url = await self.resolve_url(maybe_url)
+            if rss_url:
+                channel_id_m = re.search(r"channel_id=(UC[\w-]{22})", rss_url)
+                channel_id = channel_id_m.group(1) if channel_id_m else None
+                return [SearchResult(
+                    feed_url    = rss_url,
+                    title       = q.lstrip("@"),
+                    description = f"YouTube channel · {q}",
+                    website_url = f"https://www.youtube.com/channel/{channel_id}" if channel_id else maybe_url,
+                )]
+            if q.startswith("http"):
+                return []
+
+        api_key = os.getenv("YOUTUBE_API_KEY", "")
+        if not api_key:
+            return [SearchResult(
+                feed_url    = "",
+                title       = "YouTube API key not configured",
+                description = "Paste youtube.com/@handle to subscribe directly, or set YOUTUBE_API_KEY for full search.",
+            )]
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params={"part": "snippet", "type": "channel", "q": q,
+                            "maxResults": min(limit, 50), "key": api_key},
+                    headers=_HEADERS,
+                )
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("YouTube API search failed: %s", exc)
+            return []
+
+        results = []
+        for item in resp.json().get("items", []):
+            channel_id = item.get("id", {}).get("channelId")
+            if not channel_id:
+                continue
+            snippet = item.get("snippet", {})
+            thumbnails = snippet.get("thumbnails", {})
+            results.append(SearchResult(
+                feed_url    = _yt_rss_url(channel_id),
+                title       = snippet.get("title"),
+                description = snippet.get("description"),
+                website_url = f"https://www.youtube.com/channel/{channel_id}",
+                cover_url   = (thumbnails.get("high") or thumbnails.get("default") or {}).get("url"),
+            ))
+        return results
+
+    async def discover(self, url: str) -> list[DiscoveredFeed]:
+        rss_url = await self.resolve_url(url)
+        if rss_url:
+            return [DiscoveredFeed(feed_url=rss_url, title="YouTube channel", feed_type="atom")]
+        return []
 
     async def fetch(
         self,

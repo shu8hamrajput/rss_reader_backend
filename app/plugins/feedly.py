@@ -1,13 +1,10 @@
 """
-Feedly discovery plugin.
+Feedly plugin — general RSS feed discovery.
 
-Feedly doesn't have its own feed format — it indexes regular RSS/Atom feeds.
-This plugin contributes:
-  - search()   — searches Feedly's public feed index (no API key required)
-  - discover() — finds feeds for a website URL via Feedly's endpoint
-
-can_handle() returns False: Feedly-discovered feeds are parsed by whichever
-plugin matches their actual URL (YouTubePlugin, DefaultPlugin, etc.).
+fetch():  not implemented (Feedly-discovered feeds are plain RSS/Atom,
+          handled by DefaultPlugin or YouTubePlugin based on URL).
+search(): searches Feedly's public index of 40M+ RSS feeds. No API key required.
+discover(): finds feeds for a given website via Feedly's search API.
 """
 from __future__ import annotations
 
@@ -15,13 +12,11 @@ import logging
 
 import httpx
 
-from .base import FeedPlugin, ParsedFeed
+from .base import DiscoveredFeed, FeedPlugin, ParsedFeed, SearchResult, SearchSourceMeta
 
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"User-Agent": "RSSReader/1.0", "Accept": "application/json"}
-_SEARCH_URL  = "https://cloud.feedly.com/v3/search/feeds"
-_STREAM_URL  = "https://cloud.feedly.com/v3/streams/contents"   # for future use
 
 
 class FeedlyPlugin(FeedPlugin):
@@ -30,32 +25,34 @@ class FeedlyPlugin(FeedPlugin):
     description  = "Search Feedly's public index of 40M+ RSS feeds — no API key required"
     icon_emoji   = "🔍"
 
+    search_sources = [
+        SearchSourceMeta(
+            id          = "feedly",
+            name        = "Feedly",
+            description = "40M+ RSS feeds — blogs, newsletters, news",
+            category    = "general",
+            icon        = "🔍",
+            placeholder = "e.g. python, tech news, startup",
+            requires_key = False,
+        ),
+    ]
+
     def can_handle(self, url: str) -> bool:
-        # Feedly-discovered feeds are standard RSS/Atom; let other plugins handle them.
-        return False
+        return False   # Feedly-discovered feeds are handled by other plugins
 
-    async def fetch(
-        self,
-        url: str,
-        etag: str | None,
-        last_modified: str | None,
-    ) -> tuple[ParsedFeed | None, int]:
-        raise NotImplementedError("FeedlyPlugin does not fetch feeds directly")
+    async def fetch(self, url, etag, last_modified) -> tuple[ParsedFeed | None, int]:
+        raise NotImplementedError("FeedlyPlugin does not fetch feeds — use DefaultPlugin")
 
-    async def search(self, query: str, limit: int = 20, locale: str = "en", **kwargs) -> list[dict]:
-        """Search Feedly's public feed index.
-
-        Returns a list of dicts matching the FeedSearchResult schema.
-        """
+    async def search(self, query: str, source_id: str, limit: int = 20, locale: str = "en", **kwargs) -> list[SearchResult]:
         try:
             async with httpx.AsyncClient(timeout=10.0, headers=_HEADERS) as client:
                 resp = await client.get(
-                    _SEARCH_URL,
+                    "https://cloud.feedly.com/v3/search/feeds",
                     params={"query": query, "count": limit, "locale": locale},
                 )
                 resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.warning("Feedly search failed: HTTP %s", exc.response.status_code)
+            logger.warning("Feedly search HTTP %s for %r", exc.response.status_code, query)
             return []
         except httpx.RequestError as exc:
             logger.warning("Feedly search unreachable: %s", exc)
@@ -68,19 +65,18 @@ class FeedlyPlugin(FeedPlugin):
             feed_url = feed_id.removeprefix("feed/") if feed_id.startswith("feed/") else feed_id
             if not feed_url:
                 continue
-            results.append({
-                "feed_url":    feed_url,
-                "title":       item.get("title"),
-                "description": item.get("description"),
-                "website_url": item.get("website"),
-                "subscribers": item.get("subscribers"),
-                "language":    item.get("language"),
-                "cover_url":   item.get("coverUrl"),
-                "velocity":    item.get("velocity"),
-                "source":      "feedly",
-            })
+            results.append(SearchResult(
+                feed_url    = feed_url,
+                title       = item.get("title"),
+                description = item.get("description"),
+                website_url = item.get("website"),
+                subscribers = item.get("subscribers"),
+                language    = item.get("language"),
+                cover_url   = item.get("coverUrl"),
+                velocity    = item.get("velocity"),
+            ))
         return results
 
-    async def discover(self, url: str, **kwargs) -> list[dict]:
-        """Find feeds for a given website URL via Feedly's search API."""
-        return await self.search(f"site:{url}", limit=10)
+    async def discover(self, url: str) -> list[DiscoveredFeed]:
+        results = await self.search(f"site:{url}", source_id="feedly", limit=10)
+        return [DiscoveredFeed(feed_url=r.feed_url, title=r.title) for r in results]

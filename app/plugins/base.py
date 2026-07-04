@@ -1,9 +1,23 @@
 """
 Feed plugin protocol.
 
-Each plugin handles a specific family of feeds (YouTube, GitHub, podcasts, etc.).
-Plugins are pure data-transformers: they fetch a URL and return ParsedFeed/ParsedArticle
-structs. The database write layer in feed_parser.py handles persistence for all plugins.
+## Architecture rule
+
+The core backend handles:
+  - HTTP routing, auth, rate-limiting
+  - Database read/write (Feed, Article, User, …)
+  - Task scheduling (Celery beat/worker)
+  - OPML, webhooks, collections, highlights
+
+Plugins handle EVERYTHING type-specific:
+  - How to fetch and parse a feed URL       → fetch()
+  - How to convert a user URL to a feed URL  → normalize_url()
+  - What search sources the plugin exposes   → search_sources
+  - How to search those sources              → search()
+  - How to discover feeds on a website       → discover()
+
+Adding a new feed type = one new file in app/plugins/, one register() call.
+The router never contains HTTP calls to third-party APIs. Ever.
 """
 from __future__ import annotations
 
@@ -11,6 +25,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 
+
+# ── Data transfer objects ─────────────────────────────────────────────────────
 
 @dataclass
 class ParsedArticle:
@@ -42,24 +58,80 @@ class ParsedFeed:
     articles: list[ParsedArticle] = field(default_factory=list)
 
 
-class FeedPlugin(ABC):
-    """Base class for all feed plugins.
+@dataclass
+class SearchResult:
+    """Normalised result from any search source."""
+    feed_url: str
+    title: str | None = None
+    description: str | None = None
+    website_url: str | None = None
+    cover_url: str | None = None
+    subscribers: int | None = None
+    language: str | None = None
+    velocity: float | None = None
 
-    Subclasses must set class-level attributes `name`, `display_name` and
-    implement `can_handle()` and `fetch()`.
+
+@dataclass
+class DiscoveredFeed:
+    feed_url: str
+    title: str | None = None
+    feed_type: str | None = None   # "rss" | "atom" | "json"
+
+
+@dataclass
+class SearchSourceMeta:
+    """Metadata for one search source exposed by a plugin.
+
+    A single plugin can expose multiple sources (e.g. PodcastPlugin exposes
+    itunes, podcast_index, gpodder, fyyd).  The id is what the frontend sends
+    as ?source=... and what the registry indexes on.
+    """
+    id: str
+    name: str
+    description: str
+    category: str          # "general" | "video" | "podcast" | "dev"
+    icon: str
+    placeholder: str
+    requires_key: bool = False
+    requires_key_hint: str | None = None
+
+
+# ── Plugin base class ─────────────────────────────────────────────────────────
+
+class FeedPlugin(ABC):
+    """
+    Base class for all feed plugins.
+
+    ## Subclass contract
+
+    Required:
+        name          class-level str slug, unique across plugins ("youtube")
+        display_name  human label ("YouTube")
+        can_handle()  return True if this plugin owns the given feed URL
+        fetch()       fetch + parse the URL → ParsedFeed
+
+    Optional (override to enable):
+        search_sources     list of SearchSourceMeta this plugin exposes for discovery
+        normalize_url()    convert user input to a canonical feed URL
+        search()           search a specific source_id
+        discover()         find feeds on a website URL
     """
 
-    # ── Metadata (set on subclasses) ──────────────────────────────────────────
-    name: str          # slug used in DB: "youtube", "github", "podcast", "default"
-    display_name: str  # shown in UI: "YouTube", "GitHub Releases"
+    # ── Plugin identity ───────────────────────────────────────────────────────
+    name: str          # slug, stored in Feed.plugin_name
+    display_name: str
     description: str = ""
     icon_emoji: str = "📡"
 
-    # ── Required interface ────────────────────────────────────────────────────
+    # ── Search / discovery metadata ────────────────────────────────────────────
+    # Override in subclasses that expose search sources.
+    search_sources: list[SearchSourceMeta] = []
+
+    # ── Required ──────────────────────────────────────────────────────────────
 
     @abstractmethod
     def can_handle(self, url: str) -> bool:
-        """Return True if this plugin should handle the given feed URL."""
+        """Return True if this plugin should own the given feed URL for fetching."""
 
     @abstractmethod
     async def fetch(
@@ -68,29 +140,43 @@ class FeedPlugin(ABC):
         etag: str | None,
         last_modified: str | None,
     ) -> tuple[ParsedFeed | None, int]:
-        """Fetch and parse the feed URL.
+        """Fetch and parse the feed.
 
         Returns (ParsedFeed, http_status_code).
-        Return (None, 304) when the feed is unchanged (ETag / Last-Modified hit).
-        Raise on unrecoverable errors (non-2xx, parse failure, etc.).
+        Return (None, 304) on Not Modified.
+        Raise on errors.
         """
 
-    # ── Optional extension points ─────────────────────────────────────────────
+    # ── Optional ──────────────────────────────────────────────────────────────
 
     def normalize_url(self, url: str) -> str:
-        """Convert a user-provided URL to the canonical feed URL.
+        """Convert user input to the canonical feed URL.
 
-        Example: a YouTube channel page URL → the channel's RSS feed URL.
-        Default implementation returns the URL unchanged.
+        E.g. youtube.com/@handle → feeds/videos.xml?channel_id=UC…
+             github.com/owner/repo → github.com/owner/repo/releases.atom
         """
         return url
 
-    async def search(self, query: str, **kwargs) -> list[dict]:
-        """Search for feeds of this type. Returns list of FeedSearchResult-like dicts."""
+    async def search(
+        self,
+        query: str,
+        source_id: str,
+        limit: int = 20,
+        **kwargs,
+    ) -> list[SearchResult]:
+        """Search the given source_id for feeds matching query.
+
+        Only called when source_id is in [s.id for s in self.search_sources].
+        Return [] by default (plugin doesn't search).
+        """
         return []
 
-    async def discover(self, url: str) -> list[dict]:
-        """Discover feeds from a website URL. Returns list of DiscoveredFeed-like dicts."""
+    async def discover(self, url: str) -> list[DiscoveredFeed]:
+        """Discover feeds on a website URL.
+
+        Called by the /search/discover endpoint when the URL matches
+        this plugin's domain. Return [] to fall through to generic HTML scraping.
+        """
         return []
 
     def __repr__(self) -> str:
