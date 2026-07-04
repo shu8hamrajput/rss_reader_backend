@@ -22,6 +22,7 @@ from .celery_app import celery_app
 from .config import settings
 from .database import SessionLocal
 from .models import AlertMatch, Article, ArticleRule, Feed, GeneratedCandidate, SearchAlert, UserWebhook
+from .bus import event_bus
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
 from .services.fetchers._common import strip_and_select
@@ -350,10 +351,11 @@ def refresh_all_feeds() -> None:
                             {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                         )
                         _match_alerts(db, feed.id, feed.user_id, before_refresh, alerts_by_user.get(feed.user_id), webhooks_by_user.get(feed.user_id))
-                        _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                        asyncio.run(event_bus.emit("article.created", {
+                            "user_id": feed.user_id,
                             "feed_id": feed.id,
-                            "count": new_count,
-                        }, cached_webhooks=webhooks_by_user.get(feed.user_id))
+                            "count":   new_count,
+                        }))
                 db.commit()
             except Exception as exc:
                 logger.warning("Failed to refresh URL %s: %s", url, exc)
@@ -395,10 +397,11 @@ def refresh_feed_by_id(feed_id: int) -> int:
                     {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                 )
                 _match_alerts(db, feed.id, feed.user_id, before_refresh)
-                _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                asyncio.run(event_bus.emit("article.created", {
+                    "user_id": feed.user_id,
                     "feed_id": feed.id,
-                    "count": new_count,
-                })
+                    "count":   new_count,
+                }))
                 db.commit()
             return new_count
         except Exception as exc:

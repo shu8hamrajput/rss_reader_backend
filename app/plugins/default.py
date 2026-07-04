@@ -1,17 +1,15 @@
 """
-Default feed plugin — handles generic RSS/Atom feeds.
+Default feed plugin — handles generic RSS/Atom feeds (articles, newsletters, podcasts).
 
-Also handles podcast feeds (feeds with audio enclosures and iTunes namespace)
-since podcast detection is content-based (needs to inspect entries), not URL-based.
+This plugin is a pure parser: it extracts data from the feed XML and returns
+ParsedArticle structs. Enrichment (full-text fetch, transcript download) is handled
+by the enricher pipeline in app/enrichers/. See ADR-002.
 
-Enrichments applied:
-  - BeautifulSoup full-content fetch for article feeds
-  - iTunes namespace extraction (duration, episode number, author, image)
-  - Podcasting 2.0 transcript fetch (podcast:transcript tag)
+Podcast transcript URLs are stored in article.tags as "transcript:<url>" so the
+TranscriptEnricher can pick them up without re-parsing the feed.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -21,11 +19,8 @@ import httpx
 
 from .base import FeedPlugin, ParsedArticle, ParsedFeed
 from ..services.url_safety import assert_public_url
-from ..services.article_fetcher import fetch_full_content
 
 logger = logging.getLogger(__name__)
-
-_FETCH_SEM = asyncio.Semaphore(5)
 
 
 def _parse_date(entry: feedparser.FeedParserDict) -> datetime | None:
@@ -86,25 +81,6 @@ def _podcast_transcript_url(entry: feedparser.FeedParserDict) -> str | None:
     return None
 
 
-async def _fetch_transcript(url: str) -> str | None:
-    try:
-        assert_public_url(url)
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
-            resp = await client.get(url, headers={"User-Agent": "RSSReader/1.0"})
-        resp.raise_for_status()
-        text = resp.text
-        lines = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line in ("WEBVTT",) or "-->" in line or line.isdigit():
-                continue
-            lines.append(line)
-        return " ".join(lines)[:100_000] if lines else None
-    except Exception as exc:
-        logger.debug("Podcast transcript fetch failed for %s: %s", url, exc)
-        return None
-
-
 class DefaultPlugin(FeedPlugin):
     name         = "default"
     display_name = "RSS / Atom"
@@ -112,7 +88,7 @@ class DefaultPlugin(FeedPlugin):
     icon_emoji   = "📰"
 
     def can_handle(self, url: str) -> bool:
-        return True  # fallback — matches everything
+        return True  # fallback
 
     async def fetch(
         self,
@@ -140,12 +116,11 @@ class DefaultPlugin(FeedPlugin):
 
         feed_info = parsed.feed
         result = ParsedFeed(
-            title       = feed_info.get("title"),
-            description = feed_info.get("subtitle") or feed_info.get("description"),
-            site_url    = feed_info.get("link"),
-            icon_url    = (
-                feed_info.get("icon")
-                or feed_info.get("logo")
+            title         = feed_info.get("title"),
+            description   = feed_info.get("subtitle") or feed_info.get("description"),
+            site_url      = feed_info.get("link"),
+            icon_url      = (
+                feed_info.get("icon") or feed_info.get("logo")
                 or (feed_info.get("image") or {}).get("href")
                 or (feed_info.get("image") or {}).get("url")
             ),
@@ -154,9 +129,6 @@ class DefaultPlugin(FeedPlugin):
         )
 
         articles: list[ParsedArticle] = []
-        transcript_tasks: list[tuple[int, str]] = []   # (article_idx, transcript_url)
-        content_fetch_idxs: list[int] = []              # article indices needing full-content
-
         for entry in parsed.entries:
             guid = entry.get("id") or entry.get("link") or entry.get("title", "")
             if not guid:
@@ -180,7 +152,13 @@ class DefaultPlugin(FeedPlugin):
                 if isinstance(itunes_image, dict) else None
             )
 
-            art = ParsedArticle(
+            # Store transcript URL in tags so TranscriptEnricher can find it
+            tags: list[str] = []
+            transcript_url = _podcast_transcript_url(entry)
+            if transcript_url and media_type and media_type.startswith("audio/"):
+                tags.append(f"transcript:{transcript_url}")
+
+            articles.append(ParsedArticle(
                 guid             = guid,
                 title            = entry.get("title"),
                 url              = entry.get("link"),
@@ -194,37 +172,8 @@ class DefaultPlugin(FeedPlugin):
                 duration_seconds = duration_seconds,
                 episode_number   = str(entry.get("itunes_episode") or "").strip() or None,
                 itunes_author    = (entry.get("itunes_author") or entry.get("author") or "").strip()[:256] or None,
-            )
-            idx = len(articles)
-            articles.append(art)
-
-            # Queue transcript fetch for podcast episodes
-            transcript_url = _podcast_transcript_url(entry)
-            if transcript_url and media_type and media_type.startswith("audio/"):
-                transcript_tasks.append((idx, transcript_url))
-
-            # Queue full-content fetch for article URLs (non-podcast)
-            if art.url and not media_type:
-                content_fetch_idxs.append(idx)
-
-        # Run async enrichments concurrently
-        async def _do_transcript(idx: int, url: str) -> None:
-            async with _FETCH_SEM:
-                text = await _fetch_transcript(url)
-                if text:
-                    articles[idx].full_content = text
-
-        async def _do_content(idx: int) -> None:
-            art = articles[idx]
-            if not art.url:
-                return
-            async with _FETCH_SEM:
-                art.full_content = await fetch_full_content(art.url)
-
-        tasks: list = [_do_transcript(i, u) for i, u in transcript_tasks]
-        tasks += [_do_content(i) for i in content_fetch_idxs]
-        if tasks:
-            await asyncio.gather(*tasks)
+                tags             = tags,
+            ))
 
         result.articles = articles
         return result, resp.status_code

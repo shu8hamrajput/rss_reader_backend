@@ -10,7 +10,6 @@ to the canonical RSS feed URL.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -108,26 +107,6 @@ def _yt_duration(entry: feedparser.FeedParserDict) -> int | None:
             pass
     return None
 
-
-async def _fetch_transcript(video_id: str) -> str | None:
-    url = f"https://www.youtube.com/api/timedtext?v={video_id}&lang=en&fmt=json3"
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0,
-                                      headers={"User-Agent": "RSSReader/1.0"}) as client:
-            resp = await client.get(url)
-        if resp.status_code != 200 or not resp.content:
-            return None
-        data = resp.json()
-        lines = [
-            seg.get("utf8", "").strip().replace("\n", " ")
-            for event in data.get("events", [])
-            for seg in event.get("segs", [])
-        ]
-        text = " ".join(l for l in lines if l and l != "\n").strip()
-        return text[:100_000] if text else None
-    except Exception as exc:
-        logger.debug("YouTube transcript fetch failed for %s: %s", video_id, exc)
-        return None
 
 
 _YT_CHANNEL_RE = re.compile(
@@ -329,56 +308,37 @@ class YouTubePlugin(FeedPlugin):
             last_modified = resp.headers.get("Last-Modified"),
         )
 
-        # Fetch transcripts for all new videos concurrently
-        sem = asyncio.Semaphore(5)
+        # Pure parsing — no enrichment here. TranscriptEnricher handles transcripts.
+        # media_url stored in tags so TranscriptEnricher can extract the video_id.
         articles: list[ParsedArticle] = []
-        transcript_tasks: list[tuple[int, str]] = []
 
         for entry in parsed.entries:
             guid = entry.get("id") or entry.get("link") or entry.get("title", "")
             if not guid:
                 continue
 
-            video_id    = _extract_video_id(entry)
-            duration    = _yt_duration(entry)
-            summary     = entry.get("summary") or ""
-            title_str   = entry.get("title") or ""
-            is_short    = "#shorts" in title_str.lower() or (duration is not None and duration <= 60)
+            video_id  = _extract_video_id(entry)
+            duration  = _yt_duration(entry)
+            summary   = entry.get("summary") or ""
+            title_str = entry.get("title") or ""
+            is_short  = "#shorts" in title_str.lower() or (duration is not None and duration <= 60)
+            chapters  = _chapters_html(summary, video_id) if video_id and summary else None
+            content   = (chapters or "") + f"<p>{summary}</p>" if summary else None
 
-            chapters = _chapters_html(summary, video_id) if video_id and summary else None
-            content  = (chapters or "") + f"<p>{summary}</p>" if summary else None
-
-            thumbnail = None
-            if video_id:
-                thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-            art = ParsedArticle(
-                guid            = guid,
-                title           = title_str or None,
-                url             = entry.get("link"),
-                author          = entry.get("author"),
-                summary         = summary or None,
-                content         = content,
-                thumbnail_url   = thumbnail,
-                published_at    = _parse_date(entry),
-                media_type      = "video/youtube",
-                media_url       = entry.get("link"),
-                duration_seconds= duration,
-                episode_number  = "Short" if is_short else None,
-            )
-            articles.append(art)
-            if video_id:
-                transcript_tasks.append((len(articles) - 1, video_id))
-
-        # Fetch transcripts concurrently
-        async def _fetch_one(idx: int, vid: str) -> None:
-            async with sem:
-                text = await _fetch_transcript(vid)
-                if text:
-                    articles[idx].full_content = text
-
-        if transcript_tasks:
-            await asyncio.gather(*(_fetch_one(i, v) for i, v in transcript_tasks))
+            articles.append(ParsedArticle(
+                guid             = guid,
+                title            = title_str or None,
+                url              = entry.get("link"),
+                author           = entry.get("author"),
+                summary          = summary or None,
+                content          = content,
+                thumbnail_url    = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None,
+                published_at     = _parse_date(entry),
+                media_type       = "video/youtube",
+                media_url        = entry.get("link"),
+                duration_seconds = duration,
+                episode_number   = "Short" if is_short else None,
+            ))
 
         result.articles = articles
         return result, resp.status_code
