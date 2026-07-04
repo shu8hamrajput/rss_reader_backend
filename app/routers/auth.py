@@ -335,6 +335,7 @@ async def provider_callback(
         )
         db.add(user)
 
+    db.flush()  # assign user.id before _record_session needs it for new users
     _record_session(user, request, db)
     db.commit()
     token_response = _build_token_response(user)
