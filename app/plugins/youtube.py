@@ -264,6 +264,9 @@ class YouTubePlugin(FeedPlugin):
             ))
         return results
 
+    def can_discover(self, url: str) -> bool:
+        return "youtube.com" in url or "youtu.be" in url
+
     async def discover(self, url: str) -> list[DiscoveredFeed]:
         rss_url = await self.resolve_url(url)
         if rss_url:

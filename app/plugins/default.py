@@ -152,11 +152,9 @@ class DefaultPlugin(FeedPlugin):
                 if isinstance(itunes_image, dict) else None
             )
 
-            # Store transcript URL in tags so TranscriptEnricher can find it
-            tags: list[str] = []
-            transcript_url = _podcast_transcript_url(entry)
-            if transcript_url and media_type and media_type.startswith("audio/"):
-                tags.append(f"transcript:{transcript_url}")
+            transcript_url = _podcast_transcript_url(entry) if (
+                media_type and media_type.startswith("audio/")
+            ) else None
 
             articles.append(ParsedArticle(
                 guid             = guid,
@@ -172,7 +170,7 @@ class DefaultPlugin(FeedPlugin):
                 duration_seconds = duration_seconds,
                 episode_number   = str(entry.get("itunes_episode") or "").strip() or None,
                 itunes_author    = (entry.get("itunes_author") or entry.get("author") or "").strip()[:256] or None,
-                tags             = tags,
+                transcript_url   = transcript_url,
             ))
 
         result.articles = articles

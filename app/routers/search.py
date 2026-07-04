@@ -117,20 +117,20 @@ async def discover_feeds(url: str = Query(..., description="Website URL to inspe
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    # Plugin fast-path: let each plugin try to discover feeds for this URL first.
-    # Plugins that recognise the domain (e.g. YouTube) return without HTML scraping.
-    for plugin in plugin_registry.all_plugins:
+    # Plugin fast-path: find the first plugin whose can_discover(url) is True.
+    # Only ONE plugin is tried — the one that declared ownership of this domain.
+    # This prevents every plugin from making HTTP calls for every URL.
+    discover_plugin = plugin_registry.get_discover_plugin(url)
+    if discover_plugin:
         try:
-            found = await plugin.discover(url)
+            found = await discover_plugin.discover(url)
             if found:
                 return FeedDiscoverResponse(
                     source_url=url,
                     feeds=[DiscoveredFeed(feed_url=f.feed_url, title=f.title, feed_type=f.feed_type) for f in found],
                 )
-        except NotImplementedError:
-            continue
         except Exception as exc:
-            logger.debug("Plugin %s discover() failed for %s: %s", plugin.name, url, exc)
+            logger.debug("Plugin %s discover() failed for %s: %s", discover_plugin.name, url, exc)
 
     # Generic HTML scraping — domain-agnostic core logic (no third-party calls)
     async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=_HEADERS) as client:

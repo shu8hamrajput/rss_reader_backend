@@ -79,12 +79,9 @@ class TranscriptEnricher(ArticleEnricher):
                     article.full_content = await _fetch_youtube_transcript(video_id)
             return article
 
-        # Podcast transcript (stored in tags as "transcript:<url>")
+        # Podcast transcript URL stored directly on ParsedArticle
         if article.media_type and article.media_type.startswith("audio/"):
-            transcript_url = next(
-                (t.removeprefix("transcript:") for t in (article.tags or []) if t.startswith("transcript:")),
-                None,
-            )
+            transcript_url = article.transcript_url
             if transcript_url:
                 async with semaphore:
                     article.full_content = await _fetch_podcast_transcript(transcript_url)

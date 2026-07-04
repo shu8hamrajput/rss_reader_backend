@@ -55,10 +55,8 @@ async def import_feeds(
     content_type = file.content_type or ""
     importer     = format_registry.get_importer(filename, content_type)
     if not importer:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type. Supported: {[i.extensions for i in format_registry._importers]}",
-        )
+        supported = [ext for i in format_registry.list_importers() for ext in i["extensions"]]
+        raise HTTPException(status_code=415, detail=f"Unsupported file type. Supported: {supported}")
 
     try:
         imported_feeds = await importer.parse(raw)
@@ -120,7 +118,7 @@ async def export_feeds(
     if not exporter:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown format {format!r}. Available: {list(format_registry._exporters)}",
+            detail=f"Unknown format {format!r}. Available: {[e['name'] for e in format_registry.list_exporters()]}",
         )
 
     feeds = (

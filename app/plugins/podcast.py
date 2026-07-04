@@ -13,14 +13,14 @@ import time
 
 import httpx
 
-from .base import FeedPlugin, ParsedFeed, SearchResult, SearchSourceMeta
+from .base import DiscoveryPlugin, SearchResult, SearchSourceMeta
 
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"User-Agent": "RSSReader/1.0", "Accept": "application/json"}
 
 
-class PodcastPlugin(FeedPlugin):
+class PodcastPlugin(DiscoveryPlugin):
     name         = "podcast"
     display_name = "Podcasts"
     description  = "Search Apple Podcasts, Podcast Index, gpodder, and fyyd"
@@ -62,12 +62,6 @@ class PodcastPlugin(FeedPlugin):
             placeholder = "e.g. netzpolitik, technology",
         ),
     ]
-
-    def can_handle(self, url: str) -> bool:
-        return False   # podcast feeds are plain RSS, handled by DefaultPlugin
-
-    async def fetch(self, url, etag, last_modified) -> tuple[ParsedFeed | None, int]:
-        raise NotImplementedError("PodcastPlugin delegates fetching to DefaultPlugin")
 
     async def search(self, query: str, source_id: str, limit: int = 20, **kwargs) -> list[SearchResult]:
         if source_id == "itunes":

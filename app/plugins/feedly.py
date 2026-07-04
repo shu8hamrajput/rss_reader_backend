@@ -12,14 +12,14 @@ import logging
 
 import httpx
 
-from .base import DiscoveredFeed, FeedPlugin, ParsedFeed, SearchResult, SearchSourceMeta
+from .base import DiscoveredFeed, DiscoveryPlugin, SearchResult, SearchSourceMeta
 
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"User-Agent": "RSSReader/1.0", "Accept": "application/json"}
 
 
-class FeedlyPlugin(FeedPlugin):
+class FeedlyPlugin(DiscoveryPlugin):
     name         = "feedly"
     display_name = "Feedly"
     description  = "Search Feedly's public index of 40M+ RSS feeds — no API key required"
@@ -36,12 +36,6 @@ class FeedlyPlugin(FeedPlugin):
             requires_key = False,
         ),
     ]
-
-    def can_handle(self, url: str) -> bool:
-        return False   # Feedly-discovered feeds are handled by other plugins
-
-    async def fetch(self, url, etag, last_modified) -> tuple[ParsedFeed | None, int]:
-        raise NotImplementedError("FeedlyPlugin does not fetch feeds — use DefaultPlugin")
 
     async def search(self, query: str, source_id: str, limit: int = 20, locale: str = "en", **kwargs) -> list[SearchResult]:
         try:

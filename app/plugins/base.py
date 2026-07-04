@@ -45,6 +45,7 @@ class ParsedArticle:
     episode_number: str | None = None
     itunes_author: str | None = None
     tags: list[str] = field(default_factory=list)
+    transcript_url: str | None = None   # podcast transcript URL for TranscriptEnricher
 
 
 @dataclass
@@ -96,29 +97,30 @@ class SearchSourceMeta:
     requires_key_hint: str | None = None
 
 
-# ── Plugin base class ─────────────────────────────────────────────────────────
+# ── Plugin base classes ───────────────────────────────────────────────────────
+#
+# Two distinct plugin roles with separate ABCs:
+#
+#   FeedPlugin      — fetches and parses a feed URL (YouTube, GitHub, Default)
+#                     Required: can_handle(), fetch()
+#
+#   DiscoveryPlugin — searches directories / discovers feeds on websites (Feedly, Podcast)
+#                     Required: search_sources, search()
+#                     Optional: discover() — only called when can_discover(url) is True
+#
+# A plugin can implement both (YouTubePlugin: fetch + search).
+# Use the right base class — never raise NotImplementedError to satisfy an ABC.
+
 
 class FeedPlugin(ABC):
     """
-    Base class for all feed plugins.
+    Base class for plugins that fetch and parse feed URLs.
 
-    ## Subclass contract
-
-    Required:
-        name          class-level str slug, unique across plugins ("youtube")
-        display_name  human label ("YouTube")
-        can_handle()  return True if this plugin owns the given feed URL
-        fetch()       fetch + parse the URL → ParsedFeed
-
-    Optional (override to enable):
-        search_sources     list of SearchSourceMeta this plugin exposes for discovery
-        normalize_url()    convert user input to a canonical feed URL
-        search()           search a specific source_id
-        discover()         find feeds on a website URL
+    Required: name, display_name, can_handle(), fetch()
+    Optional: normalize_url(), search_sources, search(), discover()
     """
 
-    # ── Plugin identity ───────────────────────────────────────────────────────
-    name: str          # slug, stored in Feed.plugin_name
+    name: str
     display_name: str
     description: str = ""
     icon_emoji: str = "📡"
@@ -171,13 +173,58 @@ class FeedPlugin(ABC):
         """
         return []
 
+    def can_discover(self, url: str) -> bool:
+        """Return True if this plugin should handle feed discovery for this URL.
+
+        Override to restrict discover() to specific domains. Default: False.
+        Prevents plugins from making HTTP calls for every /search/discover request.
+        """
+        return False
+
     async def discover(self, url: str) -> list[DiscoveredFeed]:
         """Discover feeds on a website URL.
 
-        Called by the /search/discover endpoint when the URL matches
-        this plugin's domain. Return [] to fall through to generic HTML scraping.
+        Only called when can_discover(url) is True. Return [] to fall through
+        to generic HTML scraping. Default: returns [].
         """
         return []
 
     def __repr__(self) -> str:
         return f"<FeedPlugin {self.name!r}>"
+
+
+class DiscoveryPlugin(ABC):
+    """
+    Base class for plugins that provide feed search/discovery WITHOUT fetching.
+
+    Examples: FeedlyPlugin (search Feedly index), PodcastPlugin (search iTunes etc.)
+
+    Required: name, display_name, search_sources, search()
+    Optional: discover()  — only called when can_discover(url) is True
+    """
+
+    name: str
+    display_name: str
+    description: str = ""
+    icon_emoji: str = "🔍"
+    search_sources: list[SearchSourceMeta] = []
+
+    @abstractmethod
+    async def search(
+        self,
+        query: str,
+        source_id: str,
+        limit: int = 20,
+        **kwargs,
+    ) -> list[SearchResult]:
+        """Search the given source_id. Called only for source_ids in search_sources."""
+
+    def can_discover(self, url: str) -> bool:
+        """Return True if this plugin should handle feed discovery for this URL."""
+        return False
+
+    async def discover(self, url: str) -> list[DiscoveredFeed]:
+        return []
+
+    def __repr__(self) -> str:
+        return f"<DiscoveryPlugin {self.name!r}>"
