@@ -39,7 +39,14 @@ class AuthProviderRegistry:
 
 provider_registry = AuthProviderRegistry()
 
-from .google import GoogleAuthProvider  # noqa: E402
+from .google import GoogleAuthProvider
+from .github import GitHubAuthProvider
+from ..config import settings
+
 provider_registry.register(GoogleAuthProvider())
+
+# GitHub is optional — only register when credentials are configured
+if settings.github_client_id and settings.github_client_secret:
+    provider_registry.register(GitHubAuthProvider())
 
 __all__ = ["AuthProvider", "UserInfo", "AuthProviderRegistry", "provider_registry"]

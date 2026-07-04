@@ -7,9 +7,12 @@ class Settings(BaseSettings):
     # Google OAuth2
     google_client_id: str = ""
     google_client_secret: str = ""
-
-    # Where Google redirects after login (must match Google Console setting)
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+
+    # GitHub OAuth2 (optional — enables GitHub sign-in)
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    github_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
