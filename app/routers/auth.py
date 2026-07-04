@@ -144,16 +144,18 @@ def _require_google_config() -> None:
     response_class=RedirectResponse,
     status_code=302,
 )
-async def google_login(request: Request):
+async def google_login(request: Request, origin: str = Query("", description="Frontend origin to redirect back to after OAuth")):
     _require_google_config()
-    # Embed the frontend origin in the state so the callback redirects back to
-    # wherever the user started (supports multiple Vercel deployments / localhost).
+    # Priority: explicit ?origin= param > Origin header > Referer header > FRONTEND_URL setting.
+    # Explicit param is most reliable — browsers omit Referer in private mode and on some mobile
+    # browsers on cross-origin navigations. The frontend passes window.location.origin explicitly.
     def _origin_from_url(url: str) -> str:
         p = urlparse(url)
         return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
 
     frontend_origin = (
-        request.headers.get("origin")
+        origin.strip()
+        or request.headers.get("origin")
         or _origin_from_url(request.headers.get("referer", ""))
         or settings.frontend_url
     )

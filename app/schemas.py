@@ -228,6 +228,7 @@ class FeedResponse(BaseModel):
     article_count: int = 0
     unread_count: int = 0
     categories: list[CategoryResponse] = []
+    plugin_name: str | None = None
 
     @model_validator(mode="after")
     def compute_health_status(self) -> "FeedResponse":
