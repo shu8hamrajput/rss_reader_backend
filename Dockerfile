@@ -13,4 +13,4 @@ EXPOSE 8080
 # Default command runs the API; override in docker-compose / Fly processes to
 # run a Celery worker (`celery -A app.celery_app worker -l info`) or beat
 # (`celery -A app.celery_app beat -l info`) from the same image.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips=*"]
