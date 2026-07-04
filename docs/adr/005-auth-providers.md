@@ -37,15 +37,28 @@ class UserInfo:
 ## Generic auth routes
 
 ```
-GET  /auth/{provider}           → provider.authorization_url(redirect_uri, state)
-GET  /auth/{provider}/callback  → provider.exchange_code(code) → upsert user → JWT
-POST /auth/{provider}/token     → SPA/desktop code exchange
+GET  /auth/{provider}/login     → provider.authorization_url(redirect_uri, state)
+GET  /auth/{provider}/callback  → provider.exchange_code(code) → upsert user
+                                   → issue JWT → one-time exchange code → redirect
+POST /auth/exchange             → trade the one-time code above for the JWT
+                                   (keeps the JWT out of the redirect URL/history)
 GET  /auth/providers            → list registered providers for login page
 ```
+
+`GitHubAuthProvider` (and any future provider added this way) is only registered — and
+therefore only listed by `GET /auth/providers` — when its client ID/secret are configured
+(`app/auth_providers/__init__.py`).
+
+There is no generic `POST /auth/{provider}/token`. Google keeps its own dedicated
+`POST /auth/google/token` for the mobile/SPA "client handles the redirect" flow; that
+mechanism has not been generalized to other providers yet.
 
 ## Consequences
 
 - Adding GitHub OAuth = one new `GitHubAuthProvider` file + one `register()` call.
 - Login page (`GET /auth/providers`) is data-driven — no frontend hardcoding.
-- Existing `/auth/google` routes remain as aliases for backward compatibility.
-- Desktop flow (`/auth/google/desktop-url`) moves into `GoogleAuthProvider`.
+- `/auth/google` and `/auth/google/callback` are **not** aliases delegating to
+  `GoogleAuthProvider` — they remain the original, separately-implemented Google-specific
+  routes (`app/routers/auth.py`). The generic `/{provider}/...` routes are a parallel path
+  used by GitHub today; consolidating Google onto the generic dispatcher is unfinished work.
+- Desktop flow (`/auth/google/desktop-url`) stays on the Google-specific implementation, not `GoogleAuthProvider`.

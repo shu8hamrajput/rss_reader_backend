@@ -28,14 +28,29 @@ The backend has two distinct layers:
 | Concern | Location |
 |---|---|
 | HTTP routing, request validation | `app/routers/` |
-| Auth (JWT, Google OAuth) | `app/routers/auth.py`, `app/auth.py` |
+| Auth (JWT, Google/GitHub OAuth) | `app/routers/auth.py`, `app/auth.py`, `app/auth_providers/` |
 | Database models and migrations | `app/models.py`, `app/main.py:_migrate()` |
 | Feed CRUD (subscribe, list, delete) | `app/routers/feeds.py` |
+| Custom fetcher generation (LLM-assisted) | `app/routers/fetchers.py` |
 | Article storage and retrieval | `app/routers/articles.py` |
 | Highlights, notes, tags | `app/routers/highlights.py` |
-| Collections, OPML, webhooks, rules | `app/routers/` |
+| Article routing rules | `app/routers/rules.py` |
+| Saved search alerts | `app/routers/alerts.py` |
+| AI briefings/digests | `app/routers/briefings.py` |
+| Collections, OPML/export, webhooks, preferences, feature votes | `app/routers/collections.py`, `opml.py`, `export.py`, `webhooks.py`, `preferences.py`, `feature_votes.py` |
 | Celery task scheduling (the runner) | `app/tasks.py` |
 | Rate limiting, CORS, health check | `app/main.py` |
+
+Beyond the feed-source plugin layer described below, three sibling pipelines follow the
+same "core dispatches, plugin implements" pattern — see their ADRs for design rationale:
+
+| Layer | Location | ADR |
+|---|---|---|
+| Feed source plugins | `app/plugins/` | ADR-001 |
+| Content enrichers (full-content, transcripts) | `app/enrichers/` | ADR-002 |
+| Event bus (e.g. webhook delivery) | `app/bus/` | ADR-003 |
+| Import/export formats (OPML, YouTube CSV, Markdown) | `app/formats/` | ADR-004 |
+| OAuth providers (Google, GitHub) | `app/auth_providers/` | ADR-005 |
 
 **Rule:** Routers dispatch to plugins. They never contain `httpx.get("https://api.feedly.com/…")` or any other third-party call.
 
