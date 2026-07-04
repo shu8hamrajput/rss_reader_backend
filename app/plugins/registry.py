@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import DiscoveryPlugin, FeedPlugin, SearchSourceMeta
+# Runtime imports for isinstance checks and typed return annotations
+from .base import DiscoveryPlugin as _DiscoveryPlugin, FeedPlugin as _FeedPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +29,20 @@ class PluginRegistry:
 
     def register(self, plugin) -> None:
         """Register a FeedPlugin (fetch+optional search) or DiscoveryPlugin (search only)."""
-        from .base import FeedPlugin, DiscoveryPlugin
-        if isinstance(plugin, FeedPlugin):
+        if isinstance(plugin, _FeedPlugin):
             self._fetch_plugins.append(plugin)
-        elif isinstance(plugin, DiscoveryPlugin):
+            kind = "fetch"
+        elif isinstance(plugin, _DiscoveryPlugin):
             self._discovery_plugins.append(plugin)
+            kind = "discovery"
         else:
-            raise TypeError(f"Expected FeedPlugin or DiscoveryPlugin, got {type(plugin)}")
+            raise TypeError(f"Expected FeedPlugin or DiscoveryPlugin, got {type(plugin).__name__}")
 
         for src in getattr(plugin, "search_sources", []):
             if src.id in self._search_index:
                 logger.warning("Search source %r already registered; overriding", src.id)
             self._search_index[src.id] = plugin
-        logger.debug("Registered plugin: %s (%s)", plugin.name, type(plugin).__bases__[0].__name__)
+        logger.debug("Registered %s plugin: %s", kind, plugin.name)
 
     # ── Fetch dispatch ────────────────────────────────────────────────────────
 
@@ -82,7 +85,18 @@ class PluginRegistry:
     # ── Introspection ─────────────────────────────────────────────────────────
 
     @property
+    def fetch_plugins(self) -> list[_FeedPlugin]:
+        """All registered FeedPlugins (can fetch feed URLs)."""
+        return list(self._fetch_plugins)
+
+    @property
+    def discovery_plugins(self) -> list[_DiscoveryPlugin]:
+        """All registered DiscoveryPlugins (search/discover only)."""
+        return list(self._discovery_plugins)
+
+    @property
     def all_plugins(self) -> list:
+        """All plugins regardless of type. Prefer fetch_plugins or discovery_plugins when type matters."""
         return [*self._fetch_plugins, *self._discovery_plugins]
 
 

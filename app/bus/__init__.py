@@ -51,7 +51,15 @@ class EventBus:
 
 event_bus = EventBus()
 
-# Import handlers to trigger registration via @event_bus.on decorators
-from . import handlers  # noqa: E402, F401
+# Import handlers to trigger @event_bus.on registration.
+# A handler import failure is fatal — it means events would fire with no consumers,
+# producing silent data loss. Fail loudly instead of continuing with an empty bus.
+try:
+    from . import handlers  # noqa: F401
+except Exception as _exc:
+    raise ImportError(
+        f"Failed to load event bus handlers — fix the error above before starting. "
+        f"All event handlers are in app/bus/handlers/. Error: {_exc}"
+    ) from _exc
 
 __all__ = ["EventBus", "event_bus"]

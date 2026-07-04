@@ -69,10 +69,10 @@ class TranscriptEnricher(ArticleEnricher):
         if article.full_content:
             return article  # already enriched
 
-        # YouTube transcript
+        # YouTube transcript — regex sourced from YouTubePlugin to avoid duplication
         if article.media_type == "video/youtube" and article.media_url:
-            import re
-            m = re.search(r"[?&]v=([\w-]{11})|/shorts/([\w-]{11})|youtu\.be/([\w-]{11})", article.media_url)
+            from ..plugins.youtube import _YT_VIDEO_ID_RE
+            m = _YT_VIDEO_ID_RE.search(article.media_url)
             if m:
                 video_id = m.group(1) or m.group(2) or m.group(3)
                 async with semaphore:

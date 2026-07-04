@@ -12,7 +12,16 @@ class YouTubeCSVImporter(FeedImporter):
     mime_types = ["text/csv"]
     extensions = [".csv"]
 
+    def sniff(self, content: bytes) -> bool:
+        """Confirm this is a YouTube Takeout CSV by checking for the Channel Id header."""
+        try:
+            first_line = content.decode("utf-8-sig", errors="replace").splitlines()[0].lower()
+            return "channel id" in first_line or "channelid" in first_line
+        except Exception:
+            return False
+
     async def parse(self, content: bytes) -> list[ImportedFeed]:
+        self._check_size(content)
         try:
             text = content.decode("utf-8-sig")  # strip BOM
         except UnicodeDecodeError:

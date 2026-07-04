@@ -29,10 +29,27 @@ class FeedImporter(ABC):
     name: str
     mime_types: list[str] = []
     extensions: list[str] = []
+    max_bytes: int = 5 * 1024 * 1024  # subclasses can override
+
+    def sniff(self, content: bytes) -> bool:
+        """Return True if this importer can handle this specific content.
+
+        Called after extension/MIME match to disambiguate (e.g. two importers
+        share the .csv extension but target different formats).
+        Default: always True (extension match is sufficient).
+        """
+        return True
 
     @abstractmethod
     async def parse(self, content: bytes) -> list[ImportedFeed]:
-        """Parse raw bytes into a list of feeds to import."""
+        """Parse raw bytes into a list of feeds to import.
+
+        Implementations should call _check_size(content) first.
+        """
+
+    def _check_size(self, content: bytes) -> None:
+        if len(content) > self.max_bytes:
+            raise ValueError(f"File too large: {len(content)} bytes (max {self.max_bytes})")
 
     def __repr__(self) -> str:
         return f"<FeedImporter {self.name!r}>"

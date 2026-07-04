@@ -52,9 +52,16 @@ class GoogleAuthProvider(AuthProvider):
                 raise HTTPException(status_code=502, detail="Failed to fetch Google user info")
             info = user_resp.json()
 
+        provider_id = info.get("id") or info.get("sub")
+        email       = info.get("email")
+        if not provider_id or not email:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Google user info missing required fields (id={provider_id!r}, email={email!r})",
+            )
         return UserInfo(
-            provider_id = info["id"],
-            email       = info["email"],
+            provider_id = provider_id,
+            email       = email,
             name        = info.get("name"),
             avatar_url  = info.get("picture"),
         )

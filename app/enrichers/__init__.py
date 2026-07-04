@@ -18,25 +18,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FETCH_SEMAPHORE = asyncio.Semaphore(5)
+_CONCURRENCY = 5  # max simultaneous outbound HTTP calls across all enrichers
 
 
 class EnricherRegistry:
     def __init__(self) -> None:
         self._enrichers: list[ArticleEnricher] = []
+        self._semaphore: asyncio.Semaphore | None = None
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        # Created lazily inside a running event loop — safe on all Python versions
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(_CONCURRENCY)
+        return self._semaphore
 
     def register(self, enricher: ArticleEnricher) -> None:
         self._enrichers.append(enricher)
         logger.debug("Registered enricher: %s", enricher.name)
 
     async def run(self, articles: list["ParsedArticle"], plugin_name: str) -> list["ParsedArticle"]:
-        """Run all enrichers concurrently over all articles.
-
-        Each enricher processes all articles in parallel; enrichers run sequentially
-        so later enrichers can see results from earlier ones.
-        """
+        """Run all enrichers sequentially; articles within each enricher run concurrently."""
+        sem = self._get_semaphore()
         for enricher in self._enrichers:
-            tasks = [enricher.enrich(a, plugin_name, _FETCH_SEMAPHORE) for a in articles]
+            tasks = [enricher.enrich(a, plugin_name, sem) for a in articles]
             try:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for i, result in enumerate(results):

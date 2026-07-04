@@ -1,11 +1,18 @@
 """
 Webhook handler — fires user webhooks on application events.
 Consumers of: article.created, alert.matched, feed.added.
+
+Uses a single DB session per emit call:
+  1. Fetch all active webhooks for the user
+  2. Deliver concurrently via httpx
+  3. Batch-update last_fired_at for successfully delivered hooks
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -16,40 +23,62 @@ from ...models import UserWebhook
 logger = logging.getLogger(__name__)
 
 
-async def _deliver(wh: UserWebhook, event: str, payload: dict) -> None:
-    try:
-        subscribed = json.loads(wh.events) if isinstance(wh.events, str) else (wh.events or [])
-    except Exception:
-        return
+async def _deliver(webhook_id: int, url: str, subscribed: list[str], event: str, payload: dict) -> bool:
+    """Deliver one webhook. Returns True if delivered (for batch last_fired_at update)."""
     if event not in subscribed:
-        return
+        return False
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                wh.url,
+                url,
                 json={"event": event, "payload": payload},
                 headers={"Content-Type": "application/json", "User-Agent": "RSSReader-Webhook/1.0"},
             )
-        # Update last_fired_at in a separate session (fire-and-forget)
-        with SessionLocal() as db:
-            hook = db.get(UserWebhook, wh.id)
-            if hook:
-                from datetime import datetime, timezone
-                hook.last_fired_at = datetime.now(timezone.utc)
-                db.commit()
-        logger.debug("Webhook %d fired for %r → HTTP %s", wh.id, event, resp.status_code)
+        logger.debug("Webhook %d fired for %r → HTTP %s", webhook_id, event, resp.status_code)
+        return True
     except Exception as exc:
-        logger.warning("Webhook %d delivery failed for %r: %s", wh.id, event, exc)
+        logger.warning("Webhook %d delivery failed for %r: %s", webhook_id, event, exc)
+        return False
 
 
 async def _fire_for_user(user_id: int, event: str, payload: dict) -> None:
+    # Single session: fetch webhooks, deliver, batch-update last_fired_at
     with SessionLocal() as db:
         webhooks = db.query(UserWebhook).filter(
             UserWebhook.user_id == user_id,
             UserWebhook.is_active == True,  # noqa: E712
         ).all()
-    import asyncio
-    await asyncio.gather(*[_deliver(wh, event, payload) for wh in webhooks])
+        if not webhooks:
+            return
+
+        # Snapshot mutable fields before async delivery (session is not thread-safe across awaits)
+        targets = []
+        for wh in webhooks:
+            try:
+                subscribed = json.loads(wh.events) if isinstance(wh.events, str) else (wh.events or [])
+            except Exception:
+                subscribed = []
+            targets.append((wh.id, wh.url, subscribed))
+
+    # Deliver outside the session (httpx is async, session is sync)
+    results = await asyncio.gather(
+        *[_deliver(wid, url, sub, event, payload) for wid, url, sub in targets],
+        return_exceptions=True,
+    )
+
+    # Batch-update last_fired_at for successfully delivered hooks in one trip
+    now = datetime.now(timezone.utc)
+    fired_ids = [
+        targets[i][0]
+        for i, ok in enumerate(results)
+        if ok is True
+    ]
+    if fired_ids:
+        with SessionLocal() as db:
+            db.query(UserWebhook).filter(UserWebhook.id.in_(fired_ids)).update(
+                {"last_fired_at": now}, synchronize_session=False
+            )
+            db.commit()
 
 
 @event_bus.on("article.created")

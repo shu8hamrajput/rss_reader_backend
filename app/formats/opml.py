@@ -28,6 +28,7 @@ class OPMLImporter(FeedImporter):
     extensions = [".opml", ".xml"]
 
     async def parse(self, content: bytes) -> list[ImportedFeed]:
+        self._check_size(content)
         try:
             root = DefusedET.fromstring(content.decode("utf-8", errors="replace"))
         except (ET.ParseError, DefusedXmlException) as exc:

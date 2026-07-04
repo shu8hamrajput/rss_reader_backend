@@ -13,6 +13,7 @@ See ADR-001, ADR-002.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -58,6 +59,7 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
             published_at=art.published_at, media_type=art.media_type,
             media_url=art.media_url, duration_seconds=art.duration_seconds,
             episode_number=art.episode_number, itunes_author=art.itunes_author,
+            tags=json.dumps(art.tags) if art.tags else None,
         ))
         existing_guids.add(art.guid)
         new_count += 1

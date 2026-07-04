@@ -32,13 +32,26 @@ class FormatRegistry:
         self._exporters[exporter.name] = exporter
         logger.debug("Registered exporter: %s", exporter.name)
 
-    def get_importer(self, filename: str, content_type: str = "") -> FeedImporter | None:
-        """Find the right importer by filename extension or MIME type."""
-        ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        for imp in self._importers:
-            if ext in imp.extensions or content_type in imp.mime_types:
-                return imp
-        return None
+    def get_importer(self, filename: str, content_type: str = "", content: bytes = b"") -> FeedImporter | None:
+        """Find the right importer by extension, MIME type, and content sniffing.
+
+        When multiple importers share an extension (e.g. .csv), sniff() is called
+        with the actual content to pick the correct one. Pass `content` when available.
+        """
+        ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+        candidates = [
+            imp for imp in self._importers
+            if ext in imp.extensions or content_type in imp.mime_types
+        ]
+        if not candidates:
+            return None
+        # Always sniff when content is available — prevents wrong-format routing
+        if content:
+            for imp in candidates:
+                if imp.sniff(content):
+                    return imp
+            return None  # extension matched but content didn't pass sniff for any importer
+        return candidates[0]  # no content to sniff — first extension/MIME match wins
 
     def get_exporter(self, name: str) -> FeedExporter | None:
         return self._exporters.get(name)

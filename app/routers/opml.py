@@ -53,7 +53,7 @@ async def import_feeds(
 
     filename     = file.filename or ""
     content_type = file.content_type or ""
-    importer     = format_registry.get_importer(filename, content_type)
+    importer     = format_registry.get_importer(filename, content_type, raw)
     if not importer:
         supported = [ext for i in format_registry.list_importers() for ext in i["extensions"]]
         raise HTTPException(status_code=415, detail=f"Unsupported file type. Supported: {supported}")
