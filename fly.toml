@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for rss-reader-api on 2026-06-03T11:48:39+05:30
+# fly.toml app configuration file generated for rss-reader-api on 2026-07-08T11:24:53Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -10,14 +10,15 @@ primary_region = 'bom'
 
 [env]
   PORT = '8080'
-  # DATABASE_URL, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND are set as
-  # secrets (see .env.example) — point them at managed Postgres/Redis,
-  # e.g. `fly postgres create` or Neon, and a single Upstash Redis instance
-  # (db0/db1/db2 for cache, Celery result backend, and Celery broker).
 
 [processes]
   app = 'uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips="*"'
   worker = 'celery -A app.celery_app worker -B --loglevel=info --concurrency=2'
+
+[[mounts]]
+  source = 'rss_reader_data'
+  destination = '/data'
+  processes = ['app']
 
 [http_service]
   internal_port = 8080
@@ -34,21 +35,16 @@ primary_region = 'bom'
     method = 'GET'
     path = '/health'
 
-[[mounts]]
-  source = 'rss_reader_data'
-  destination = '/data'
-  processes = ['app']
-
 [[vm]]
-  processes = ['app']
   memory = '256mb'
   cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256
+  processes = ['app']
 
 [[vm]]
-  processes = ['worker']
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
   memory_mb = 512
+  processes = ['worker']
