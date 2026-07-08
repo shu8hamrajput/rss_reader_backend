@@ -71,6 +71,29 @@ def test_refresh_feed_not_modified(db_session, user):
     assert feed.last_modified == "old-lm"
 
 
+def test_refresh_feed_force_bypasses_conditional_headers(db_session, user):
+    """Manual refresh (force=True) must not send If-None-Match/If-Modified-Since —
+    otherwise hosts that echo back a stale ETag/Last-Modified would make every
+    user-initiated refresh silently return 0 new articles forever."""
+    feed = make_feed(db_session, user, etag="old-etag", last_modified="old-lm")
+    make_article(db_session, feed, guid="existing-guid")
+
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
+        status_code=200, text=RSS_XML,
+        headers={"ETag": "etag123", "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"},
+    )))
+
+    with patch("app.services.feed_parser.httpx.AsyncClient", return_value=fake), \
+            patch("app.services.feed_parser.fetch_full_content", new=AsyncMock(return_value=None)):
+        new_count = asyncio.run(refresh_feed(feed, db_session, force=True))
+
+    sent_headers = fake.get.call_args.kwargs["headers"]
+    assert "If-None-Match" not in sent_headers
+    assert "If-Modified-Since" not in sent_headers
+    assert new_count == 1
+    assert feed.etag == "etag123"
+
+
 def test_refresh_feed_inserts_only_new_articles(db_session, user):
     feed = make_feed(db_session, user, title=None, etag=None, last_modified=None)
     make_article(db_session, feed, guid="existing-guid")

@@ -257,7 +257,7 @@ async def refresh_feed_endpoint(
 ):
     feed = _owned_feed(feed_id, current_user, db)
     try:
-        new_count = await refresh_feed(feed, db)
+        new_count = await refresh_feed(feed, db, force=True)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch feed: {exc}")
     return RefreshResult(feed_id=feed_id, new_articles=new_count, message=f"Fetched {new_count} new article(s)")
