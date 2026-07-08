@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    _migrate()
+    try:
+        Base.metadata.create_all(bind=engine)
+        _migrate()
+    except Exception:
+        logger.exception("Database schema initialization failed during startup; continuing without migrations")
     yield
 
 
