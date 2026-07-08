@@ -128,12 +128,17 @@ def test_delete_feed_cascades_articles(client, db_session, user, auth_headers):
 def test_refresh_feed_returns_new_article_count(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
 
-    with patch("app.routers.feeds.refresh_feed", new_callable=AsyncMock, return_value=3):
+    with patch("app.routers.feeds.refresh_feed", new_callable=AsyncMock, return_value=3) as mock_refresh:
         resp = client.post(f"/api/v1/feeds/{feed.id}/refresh", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["feed_id"] == feed.id
     assert body["new_articles"] == 3
+    # Manual refresh must bypass cached ETag/Last-Modified — some hosts echo
+    # back stale validators and would otherwise 304 forever after the first fetch.
+    mock_refresh.assert_awaited_once()
+    assert mock_refresh.call_args.kwargs["force"] is True
+    assert mock_refresh.call_args.args[0].id == feed.id
 
 
 def test_refresh_feed_failure_returns_502(client, db_session, user, auth_headers):

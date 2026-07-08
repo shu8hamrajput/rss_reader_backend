@@ -166,13 +166,15 @@ async def _http_fetch(
     url: str,
     etag: str | None,
     last_modified: str | None,
+    force: bool = False,
 ) -> tuple[httpx.Response, bool]:
     assert_public_url(url)
     headers: dict[str, str] = {"User-Agent": "RSSReader/1.0"}
-    if etag:
-        headers["If-None-Match"] = etag
-    if last_modified:
-        headers["If-Modified-Since"] = last_modified
+    if not force:
+        if etag:
+            headers["If-None-Match"] = etag
+        if last_modified:
+            headers["If-Modified-Since"] = last_modified
     async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
         resp = await client.get(url, headers=headers)
     return resp, resp.status_code == 304
@@ -433,9 +435,16 @@ async def _fetch_youtube_transcripts_for_articles(
         await asyncio.gather(*tasks)
 
 
-async def refresh_feed(feed: Feed, db: Session) -> int:
-    """Fetch the feed, store new articles, update HTTP cache headers. Returns new article count."""
-    resp, not_modified = await _http_fetch(feed.url, feed.etag, feed.last_modified)
+async def refresh_feed(feed: Feed, db: Session, force: bool = False) -> int:
+    """Fetch the feed, store new articles, update HTTP cache headers. Returns new article count.
+
+    `force=True` skips the If-None-Match/If-Modified-Since conditional-GET headers,
+    bypassing any 304 the origin would otherwise return. Manual, user-initiated
+    refreshes use this — some feed hosts (WordPress + CDN combos in particular)
+    echo back a stale ETag/Last-Modified even when new entries exist, which would
+    otherwise make every subsequent manual refresh silently no-op forever.
+    """
+    resp, not_modified = await _http_fetch(feed.url, feed.etag, feed.last_modified, force=force)
 
     if not_modified:
         feed.last_fetched_at = datetime.now(timezone.utc)
