@@ -234,6 +234,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
             # Excludes a feed from the scheduled Celery beat refresh — manual-only fetch
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS manual_refresh_only BOOLEAN NOT NULL DEFAULT FALSE",
+            # User's freeform note on why they follow this feed
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS note VARCHAR(500)",
             # Pinned feeds surface above category ordering regardless of folder
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
         ]

@@ -213,7 +213,15 @@ class FeedUpdate(BaseModel):
     default_open_action: str | None = None
     importance_tier: str | None = None
     manual_refresh_only: bool | None = None
+    note: str | None = None
     pinned: bool | None = None
+
+    @field_validator("note")
+    @classmethod
+    def note_max_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 500:
+            raise ValueError("note must be 500 characters or fewer")
+        return v
 
     @field_validator("default_open_action")
     @classmethod
@@ -256,6 +264,7 @@ class FeedResponse(BaseModel):
     default_open_action: str = "reader"
     importance_tier: str = "casual"
     manual_refresh_only: bool = False
+    note: str | None = None
     pinned: bool = False
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False

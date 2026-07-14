@@ -264,6 +264,8 @@ def update_feed(
         feed.importance_tier = payload.importance_tier
     if payload.manual_refresh_only is not None:
         feed.manual_refresh_only = payload.manual_refresh_only
+    if payload.note is not None:
+        feed.note = payload.note.strip() or None
     if payload.pinned is not None:
         feed.pinned = payload.pinned
     db.commit()
