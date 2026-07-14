@@ -273,6 +273,8 @@ def update_feed(
         feed.icon_locked = True
     if payload.pinned is not None:
         feed.pinned = payload.pinned
+    if payload.auto_full_content is not None:
+        feed.auto_full_content = payload.auto_full_content
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

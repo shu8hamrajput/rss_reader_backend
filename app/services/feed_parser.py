@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from ..enrichers import enricher_registry
 from ..models import Article, Feed
 from ..plugins import plugin_registry
-from ..plugins.base import ParsedFeed
+from ..plugins.base import ParsedArticle, ParsedFeed
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,13 @@ def _apply_feed_meta(feed: Feed, parsed: ParsedFeed, plugin_name: str) -> None:
         feed.plugin_name = plugin_name
 
 
+def _is_transcript_content(art: ParsedArticle) -> bool:
+    """True for audio/video articles, where full_content (if any) is a transcript
+    from TranscriptEnricher — a distinct feature from FullContentEnricher's
+    article-page scrape, and never suppressed by auto_full_content."""
+    return art.media_type == "video/youtube" or bool(art.media_type and art.media_type.startswith("audio/"))
+
+
 def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     existing_guids: set[str] = {
         row[0] for row in db.query(Article.guid).filter(Article.feed_id == feed.id).all()
@@ -55,10 +62,15 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     for art in parsed.articles:
         if not art.guid or art.guid in existing_guids:
             continue
+        # auto_full_content=False withholds the scraped article page at ingest —
+        # the reader fetches it on demand via refetch/save-later instead. Doesn't
+        # apply to transcripts, which are a separate enrichment.
+        keep_full_content = feed.auto_full_content or _is_transcript_content(art)
         db.add(Article(
             feed_id=feed.id, guid=art.guid, title=art.title, url=art.url,
             author=art.author, summary=art.summary, content=art.content,
-            full_content=art.full_content, thumbnail_url=art.thumbnail_url,
+            full_content=art.full_content if keep_full_content else None,
+            thumbnail_url=art.thumbnail_url,
             published_at=art.published_at, media_type=art.media_type,
             media_url=art.media_url, duration_seconds=art.duration_seconds,
             episode_number=art.episode_number, itunes_author=art.itunes_author,

@@ -218,6 +218,7 @@ class FeedUpdate(BaseModel):
     color: str | None = None
     icon_url: str | None = None
     pinned: bool | None = None
+    auto_full_content: bool | None = None
 
     @field_validator("note")
     @classmethod
@@ -277,6 +278,7 @@ class FeedResponse(BaseModel):
     note: str | None = None
     color: str | None = None
     pinned: bool = False
+    auto_full_content: bool = True
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
