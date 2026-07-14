@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -25,6 +26,12 @@ from ..plugins import plugin_registry
 from ..plugins.base import ParsedArticle, ParsedFeed
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_title(title: str | None) -> str:
+    if not title:
+        return ""
+    return re.sub(r"\s+", " ", title).strip().lower()
 
 
 def _apply_feed_meta(feed: Feed, parsed: ParsedFeed, plugin_name: str) -> None:
@@ -55,6 +62,18 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     existing_guids: set[str] = {
         row[0] for row in db.query(Article.guid).filter(Article.feed_id == feed.id).all()
     }
+    # suppress_duplicates feeds (aggregators/syndicators) skip articles whose title
+    # already exists among this user's OTHER feeds — scoped per-user, opt-in, since
+    # title collisions across unrelated feeds are otherwise too common to trust.
+    seen_titles: set[str] = set()
+    if feed.suppress_duplicates:
+        seen_titles = {
+            _normalize_title(row[0]) for row in db.query(Article.title)
+            .join(Feed, Article.feed_id == Feed.id)
+            .filter(Feed.user_id == feed.user_id, Feed.id != feed.id)
+            .all()
+        }
+        seen_titles.discard("")
     # Feeds with auto_mark_read skip the unread inbox entirely — for low-signal
     # feeds skimmed via smart views but never opened individually.
     read_at = datetime.now(timezone.utc) if feed.auto_mark_read else None
@@ -62,6 +81,10 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     for art in parsed.articles:
         if not art.guid or art.guid in existing_guids:
             continue
+        if feed.suppress_duplicates:
+            normalized = _normalize_title(art.title)
+            if normalized and normalized in seen_titles:
+                continue
         # auto_full_content=False withholds the scraped article page at ingest —
         # the reader fetches it on demand via refetch/save-later instead. Doesn't
         # apply to transcripts, which are a separate enrichment.
@@ -78,6 +101,8 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
             is_read=feed.auto_mark_read, read_at=read_at,
         ))
         existing_guids.add(art.guid)
+        if feed.suppress_duplicates:
+            seen_titles.add(_normalize_title(art.title))
         new_count += 1
     return new_count
 

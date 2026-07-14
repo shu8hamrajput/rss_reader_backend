@@ -243,6 +243,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
             # Per-feed override of ingest-time full-content fetching
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS auto_full_content BOOLEAN NOT NULL DEFAULT TRUE",
+            # Skip new articles whose title duplicates one already ingested from another of this user's feeds
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS suppress_duplicates BOOLEAN NOT NULL DEFAULT FALSE",
         ]
         for stmt in stmts:
             try:

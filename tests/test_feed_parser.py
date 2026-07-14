@@ -203,6 +203,59 @@ def test_write_articles_auto_mark_read_marks_new_articles_read(db_session, user)
     assert article.read_at is not None
 
 
+def test_write_articles_suppress_duplicates_skips_matching_title_from_other_feed(db_session, user):
+    original = make_feed(db_session, user, suppress_duplicates=False)
+    make_article(db_session, original, guid="orig-guid", title="Big Announcement")
+
+    aggregator = make_feed(db_session, user, suppress_duplicates=True)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="agg-guid", title="  Big   Announcement  ")])
+
+    new_count = _write_articles(aggregator, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 0
+    assert db_session.query(Article).filter(Article.feed_id == aggregator.id).count() == 0
+
+
+def test_write_articles_suppress_duplicates_ignores_other_users_feeds(db_session, user, other_user):
+    other_feed = make_feed(db_session, other_user, suppress_duplicates=False)
+    make_article(db_session, other_feed, guid="other-guid", title="Shared Title")
+
+    feed = make_feed(db_session, user, suppress_duplicates=True)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Shared Title")])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+
+
+def test_write_articles_suppress_duplicates_dedupes_within_same_batch(db_session, user):
+    feed = make_feed(db_session, user, suppress_duplicates=True)
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="g1", title="Repeated Title"),
+        ParsedArticle(guid="g2", title="Repeated Title"),
+    ])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+
+
+def test_write_articles_suppress_duplicates_false_does_not_suppress(db_session, user):
+    original = make_feed(db_session, user)
+    make_article(db_session, original, guid="orig-guid", title="Repeated Title")
+
+    feed = make_feed(db_session, user, suppress_duplicates=False)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Repeated Title")])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+
+
 def test_write_articles_withholds_full_content_when_auto_full_content_disabled(db_session, user):
     feed = make_feed(db_session, user, auto_full_content=False)
     parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Article", full_content="<p>scraped</p>")])
