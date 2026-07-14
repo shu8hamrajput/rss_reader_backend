@@ -226,6 +226,8 @@ def _migrate() -> None:
             # Plugin system — track which plugin handles each feed
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS plugin_name VARCHAR(64)",
             "CREATE INDEX IF NOT EXISTS ix_feeds_plugin_name ON feeds (plugin_name) WHERE plugin_name IS NOT NULL",
+            # Per-feed importance tier — drives sort order and badge emphasis
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
         ]
         for stmt in stmts:
             try:

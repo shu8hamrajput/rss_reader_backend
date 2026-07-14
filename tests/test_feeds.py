@@ -99,6 +99,33 @@ def test_update_feed_category_not_owned_returns_404(client, db_session, user, ot
     assert resp.status_code == 404
 
 
+def test_update_feed_importance_tier(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.importance_tier == "casual"
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"importance_tier": "must_read"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["importance_tier"] == "must_read"
+
+
+def test_update_feed_importance_tier_rejects_invalid_value(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"importance_tier": "bogus"}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
+def test_list_feeds_orders_by_importance_tier(client, db_session, user, auth_headers):
+    archive = make_feed(db_session, user, title="Archive Feed", importance_tier="archive_only")
+    casual = make_feed(db_session, user, title="Casual Feed", importance_tier="casual")
+    must_read = make_feed(db_session, user, title="Must Read Feed", importance_tier="must_read")
+
+    resp = client.get("/api/v1/feeds", headers=auth_headers)
+    assert resp.status_code == 200
+    ids = [f["id"] for f in resp.json()["items"]]
+    assert ids.index(must_read.id) < ids.index(casual.id) < ids.index(archive.id)
+
+
 def test_snooze_and_unsnooze_feed(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user, fetch_failure_count=5)
 

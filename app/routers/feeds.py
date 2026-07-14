@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, text
+from sqlalchemy import case, func, text
 from sqlalchemy.orm import Session, selectinload, defer
 
 from ..auth import get_current_user
@@ -199,7 +199,14 @@ def list_feeds(
         q = q.filter(Feed.is_active == True)  # noqa: E712
     if category_id is not None:
         q = q.filter(Feed.categories.any(id=category_id))
-    feeds = q.order_by(Feed.created_at.desc()).limit(500).all()
+    # must_read first, then casual, then archive_only; created_at desc within each tier
+    tier_order = case(
+        (Feed.importance_tier == "must_read", 0),
+        (Feed.importance_tier == "casual", 1),
+        (Feed.importance_tier == "archive_only", 2),
+        else_=1,
+    )
+    feeds = q.order_by(tier_order, Feed.created_at.desc()).limit(500).all()
     return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
 
 
@@ -226,6 +233,8 @@ def update_feed(
         feed.is_active = payload.is_active
     if payload.category_ids is not None:
         _apply_categories(feed, payload.category_ids, current_user, db)
+    if payload.importance_tier is not None:
+        feed.importance_tier = payload.importance_tier
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

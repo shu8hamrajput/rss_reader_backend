@@ -201,10 +201,21 @@ class FeedCreate(BaseModel):
         return v.strip()
 
 
+VALID_IMPORTANCE_TIERS = {"must_read", "casual", "archive_only"}
+
+
 class FeedUpdate(BaseModel):
     title: str | None = None
     is_active: bool | None = None
     category_ids: list[int] | None = None
+    importance_tier: str | None = None
+
+    @field_validator("importance_tier")
+    @classmethod
+    def valid_importance_tier(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_IMPORTANCE_TIERS:
+            raise ValueError(f"importance_tier must be one of {sorted(VALID_IMPORTANCE_TIERS)}")
+        return v
 
 
 class FeedResponse(BaseModel):
@@ -229,6 +240,7 @@ class FeedResponse(BaseModel):
     unread_count: int = 0
     categories: list[CategoryResponse] = []
     plugin_name: str | None = None
+    importance_tier: str = "casual"
 
     @model_validator(mode="after")
     def compute_health_status(self) -> "FeedResponse":
