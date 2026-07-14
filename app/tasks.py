@@ -395,6 +395,15 @@ def refresh_all_feeds() -> None:
         db.close()
 
 
+def _highlighted_article_ids(db: Session, feed_id: int) -> set[int]:
+    return {
+        row[0] for row in db.query(Highlight.article_id)
+        .join(Article, Highlight.article_id == Article.id)
+        .filter(Article.feed_id == feed_id)
+        .all()
+    }
+
+
 def _prune_expired_articles(db: Session) -> int:
     """Delete articles past their feed's retention_days window.
 
@@ -406,12 +415,7 @@ def _prune_expired_articles(db: Session) -> int:
     deleted = 0
     for feed in db.query(Feed).filter(Feed.retention_days.isnot(None)).all():
         cutoff = now - timedelta(days=feed.retention_days)
-        highlighted_ids = {
-            row[0] for row in db.query(Highlight.article_id)
-            .join(Article, Highlight.article_id == Article.id)
-            .filter(Article.feed_id == feed.id)
-            .all()
-        }
+        highlighted_ids = _highlighted_article_ids(db, feed.id)
         q = db.query(Article).filter(
             Article.feed_id == feed.id,
             Article.created_at < cutoff,
@@ -424,11 +428,43 @@ def _prune_expired_articles(db: Session) -> int:
     return deleted
 
 
+def _prune_excess_articles(db: Session) -> int:
+    """Evict the oldest articles once a feed exceeds max_articles_retained.
+
+    Bookmarked and highlighted articles never count toward the cap and are
+    never evicted — same protection as age-based retention.
+    """
+    deleted = 0
+    for feed in db.query(Feed).filter(Feed.max_articles_retained.isnot(None)).all():
+        highlighted_ids = _highlighted_article_ids(db, feed.id)
+        eligible_ids = [
+            row[0] for row in db.query(Article.id)
+            .filter(Article.feed_id == feed.id, Article.is_bookmarked == False)
+            .order_by(Article.created_at.desc())
+            .all()
+            if row[0] not in highlighted_ids
+        ]
+        excess_ids = eligible_ids[feed.max_articles_retained:]
+        if excess_ids:
+            deleted += db.query(Article).filter(Article.id.in_(excess_ids)).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
 @celery_app.task(name="app.tasks.prune_expired_articles")
 def prune_expired_articles() -> int:
     db = SessionLocal()
     try:
         return _prune_expired_articles(db)
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.prune_excess_articles")
+def prune_excess_articles() -> int:
+    db = SessionLocal()
+    try:
+        return _prune_excess_articles(db)
     finally:
         db.close()
 

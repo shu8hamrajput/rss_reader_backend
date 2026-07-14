@@ -249,6 +249,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS refresh_interval_minutes INTEGER",
             # Per-feed retention window in days; NULL = keep articles indefinitely
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS retention_days INTEGER",
+            # Per-feed cap on articles retained; NULL = no cap
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS max_articles_retained INTEGER",
         ]
         for stmt in stmts:
             try:

@@ -35,5 +35,9 @@ celery_app.conf.update(
             "task": "app.tasks.prune_expired_articles",
             "schedule": 24 * 60 * 60,  # once a day — retention is a slow-moving setting, no need for finer cadence
         },
+        "prune-excess-articles": {
+            "task": "app.tasks.prune_excess_articles",
+            "schedule": 24 * 60 * 60,
+        },
     },
 )

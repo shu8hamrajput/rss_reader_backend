@@ -222,6 +222,7 @@ class FeedUpdate(BaseModel):
     suppress_duplicates: bool | None = None
     refresh_interval_minutes: int | None = None
     retention_days: int | None = None
+    max_articles_retained: int | None = None
 
     @field_validator("refresh_interval_minutes")
     @classmethod
@@ -237,6 +238,14 @@ class FeedUpdate(BaseModel):
         # 0 is accepted as a "clear the retention window, keep indefinitely" sentinel.
         if v is not None and v != 0 and not (1 <= v <= 3650):
             raise ValueError("retention_days must be 0 (clear override) or between 1 and 3650 (10 years)")
+        return v
+
+    @field_validator("max_articles_retained")
+    @classmethod
+    def valid_max_articles_retained(cls, v: int | None) -> int | None:
+        # 0 is accepted as a "clear the cap, keep everything" sentinel.
+        if v is not None and v != 0 and not (10 <= v <= 100000):
+            raise ValueError("max_articles_retained must be 0 (clear cap) or between 10 and 100000")
         return v
 
     @field_validator("note")
@@ -301,6 +310,7 @@ class FeedResponse(BaseModel):
     suppress_duplicates: bool = False
     refresh_interval_minutes: int | None = None
     retention_days: int | None = None
+    max_articles_retained: int | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
