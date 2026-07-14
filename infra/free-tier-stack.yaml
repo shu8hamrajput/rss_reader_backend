@@ -1,0 +1,214 @@
+# infra/free-tier-stack.yaml
+#
+# Reference architecture: run rss_reader_backend entirely on free cloud tiers,
+# spread across providers so no single quota becomes a bottleneck.
+# Free-tier figures verified against each provider's pricing page, 2026-07-14 —
+# these change without notice (see the oracle_cloud caveat below), so re-check
+# before relying on this for anything production-critical.
+#
+# See "alternatives.single_box_simple" at the bottom for a lower-maintenance
+# option that trades resilience for fewer moving parts.
+
+meta:
+  project: rss_reader_backend
+  monthly_cost_usd: 0
+  last_verified: "2026-07-14"
+
+providers:
+
+  - name: google_cloud
+    role: compute
+    resource: e2-micro VM (Always Free)
+    region_constraint: [us-west1, us-central1, us-east1]
+    free_quota:
+      instances: 1
+      disk: 30GB standard persistent disk
+      duration: permanent, no expiry
+    hosts:
+      - FastAPI app (uvicorn)
+      - Celery worker + beat (combined process)
+    env_vars_set_here: []
+    setup_notes: >
+      Machine type must be exactly e2-micro, disk must be Standard (not
+      SSD/Balanced), network tier must be Standard — any deviation drops
+      you into paid billing.
+    signup_url: https://cloud.google.com/free
+    caveat: null
+
+  - name: oracle_cloud
+    role: compute
+    resource: Ampere A1 ARM VM (Always Free)
+    optional: true
+    free_quota:
+      ocpu: 2                        # cut from 4 in June 2026, undocumented
+      ram_gb: 12                     # cut from 24 in June 2026
+      storage_gb: 200
+      compute_hours_per_month: 1500
+    hosts:
+      - optional standby copy of api + worker (failover)
+    env_vars_set_here: []
+    setup_notes: null
+    signup_url: https://www.oracle.com/cloud/free/
+    caveat: >
+      Oracle silently halved this quota in June 2026 with no announcement
+      and no notification to existing users. Treat it as a bonus/backup
+      box, not the one you depend on.
+
+  - name: neon
+    role: database
+    resource: Postgres (serverless, scale-to-zero)
+    free_quota:
+      storage_gb: 0.5
+      compute_hours_per_month: 100   # "CU-hours"
+      egress_gb_per_month: 5
+      projects: 100
+    hosts:
+      - all app tables (users, feeds, articles, collections, highlights, ...)
+    env_vars_set_here:
+      - DATABASE_URL
+    setup_notes: >
+      Free plan is scale-to-zero only — first query after idle has ~1s
+      wake latency. Hitting the 100 CU-hr or 0.5GB cap suspends the DB
+      until the next billing cycle.
+    signup_url: https://neon.com
+    caveat: null
+
+  - name: upstash
+    role: cache_and_pubsub
+    resource: Redis (serverless)
+    free_quota:
+      commands_per_month: 500000
+      storage_mb: 256
+      databases: 10
+    hosts:
+      - rate limiter (slowapi, app/main.py)
+      - SSE pub/sub (app/services/events.py)
+      - celery result backend
+    env_vars_set_here:
+      - REDIS_URL
+      - CELERY_RESULT_BACKEND
+    setup_notes: Use the rediss:// (TLS) connection string, not redis://.
+    signup_url: https://upstash.com
+    caveat: null
+
+  - name: cloudamqp
+    role: message_queue
+    resource: RabbitMQ ("Little Lemur" free plan)
+    free_quota:
+      messages_per_month: "check current dashboard cap — historically ~1,000,000"
+      concurrent_connections: 20
+    hosts:
+      - celery broker (refresh_all_feeds, refresh_feed_by_id tasks)
+    env_vars_set_here:
+      - CELERY_BROKER_URL
+    setup_notes: >
+      Kept separate from Upstash Redis so queue traffic never eats into
+      the 500K/month Redis command budget. .env.example already documents
+      this exact combo (amqps://user:pass@host/vhost).
+    signup_url: https://www.cloudamqp.com
+    caveat: null
+
+  - name: cloudflare
+    role: dns_cdn_tls
+    resource: Free plan + Cloudflare Tunnel
+    free_quota:
+      bandwidth: unlimited
+      requests: unlimited
+    hosts:
+      - DNS for your domain
+      - TLS termination
+      - Tunnel from the VM (no inbound firewall ports opened)
+    env_vars_set_here:
+      - FRONTEND_URL
+      - CORS_ORIGINS
+    setup_notes: >
+      Run the cloudflared daemon on the compute VM to tunnel
+      localhost:8080 to your domain — avoids opening any inbound port.
+    signup_url: https://cloudflare.com
+    caveat: null
+
+  - name: cloudflare_r2
+    role: object_storage
+    resource: R2 bucket
+    free_quota:
+      storage_gb: 10
+      class_a_ops_per_month: 1000000    # writes / list
+      class_b_ops_per_month: 10000000   # reads
+      egress_fee_usd: 0                 # always free, unlimited egress
+    hosts:
+      - nightly pg_dump backups
+      - OPML / highlight export archives
+    env_vars_set_here: []
+    setup_notes: Push backups via a Celery beat task or a scheduled GitHub Actions job.
+    signup_url: https://developers.cloudflare.com/r2/
+    caveat: null
+
+  - name: uptimerobot
+    role: monitoring
+    resource: HTTP monitor
+    free_quota:
+      monitors: 50
+      check_interval_minutes: 5
+    hosts:
+      - GET /health polling
+    env_vars_set_here: []
+    setup_notes: Also alerts you by email/SMS if the VM or app goes down.
+    signup_url: https://uptimerobot.com
+    caveat: null
+
+  - name: github_actions
+    role: ci_and_scheduled_jobs
+    resource: Hosted runner minutes
+    free_quota:
+      minutes_per_month_public_repo: unlimited
+      minutes_per_month_private_repo: 2000
+    hosts:
+      - pytest on push (tests/)
+      - optional: scheduled workflow as a redundant health ping
+    env_vars_set_here: []
+    setup_notes: >
+      Public repos get unlimited minutes; this repo is private, so budget
+      is 2000 min/month on the Free plan.
+    signup_url: https://github.com/features/actions
+    caveat: null
+
+  - name: google_oauth
+    role: auth
+    resource: OAuth 2.0 client credentials
+    free_quota: unlimited — not a quota-limited product
+    hosts:
+      - user login (app/auth_providers/google.py)
+    env_vars_set_here:
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - GOOGLE_REDIRECT_URI
+    setup_notes: null
+    signup_url: https://console.cloud.google.com/apis/credentials
+    caveat: null
+
+topology:
+
+  compute_processes:
+    - process: "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+      runs_on: google_cloud.e2-micro
+    - process: "celery -A app.celery_app worker -B --loglevel=info --concurrency=2"
+      runs_on: google_cloud.e2-micro
+
+  dependency_flow:
+    - "api/worker -> neon (postgres via DATABASE_URL)"
+    - "api/worker -> upstash (redis via REDIS_URL, CELERY_RESULT_BACKEND)"
+    - "worker -> cloudamqp (broker via CELERY_BROKER_URL)"
+    - "internet -> cloudflare (dns/tls/tunnel) -> google_cloud.e2-micro:8080"
+    - "worker -> cloudflare_r2 (nightly backup push)"
+    - "uptimerobot -> cloudflare -> google_cloud.e2-micro:8080/health"
+
+alternatives:
+  single_box_simple:
+    description: >
+      Skip the multi-provider spread entirely. Run docker-compose.yml
+      unmodified (postgres + redis + rabbitmq + api + celery-worker +
+      celery-beat, all bundled) on one free VM — oracle_cloud or
+      google_cloud. Fewer accounts, fewer moving parts to monitor, same
+      $0/month, but no managed backups/failover on the individual pieces.
+    providers_used:
+      - oracle_cloud   # or google_cloud
