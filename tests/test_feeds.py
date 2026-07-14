@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from .conftest import make_category, make_feed, make_article
@@ -99,6 +100,31 @@ def test_update_feed_category_not_owned_returns_404(client, db_session, user, ot
     assert resp.status_code == 404
 
 
+def test_update_feed_auto_mark_read(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.auto_mark_read is False
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"auto_mark_read": True}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["auto_mark_read"] is True
+
+
+def test_update_feed_default_open_action(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.default_open_action == "reader"
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"default_open_action": "original"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["default_open_action"] == "original"
+
+
+def test_update_feed_default_open_action_rejects_invalid_value(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"default_open_action": "bogus"}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
 def test_update_feed_importance_tier(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
     assert feed.importance_tier == "casual"
@@ -174,3 +200,55 @@ def test_refresh_feed_failure_returns_502(client, db_session, user, auth_headers
     with patch("app.routers.feeds.refresh_feed", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
         resp = client.post(f"/api/v1/feeds/{feed.id}/refresh", headers=auth_headers)
     assert resp.status_code == 502
+
+
+# ── suggest_unsubscribe ──────────────────────────────────────────────────────
+
+def test_suggest_unsubscribe_true_for_old_feed_never_read(client, db_session, user, auth_headers):
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    feed = make_feed(db_session, user, created_at=old)
+    make_article(db_session, feed, is_read=False)
+
+    resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suggest_unsubscribe"] is True
+
+
+def test_suggest_unsubscribe_true_for_old_feed_stale_read(client, db_session, user, auth_headers):
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    stale_read = datetime.now(timezone.utc) - timedelta(days=45)
+    feed = make_feed(db_session, user, created_at=old)
+    make_article(db_session, feed, is_read=True, read_at=stale_read)
+
+    resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suggest_unsubscribe"] is True
+
+
+def test_suggest_unsubscribe_false_for_recently_read_feed(client, db_session, user, auth_headers):
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    recent_read = datetime.now(timezone.utc) - timedelta(days=2)
+    feed = make_feed(db_session, user, created_at=old)
+    make_article(db_session, feed, is_read=True, read_at=recent_read)
+
+    resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suggest_unsubscribe"] is False
+
+
+def test_suggest_unsubscribe_false_for_new_feed(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)  # created_at defaults to now
+    make_article(db_session, feed, is_read=False)
+
+    resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suggest_unsubscribe"] is False
+
+
+def test_suggest_unsubscribe_false_for_feed_with_no_articles(client, db_session, user, auth_headers):
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    feed = make_feed(db_session, user, created_at=old)
+
+    resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suggest_unsubscribe"] is False

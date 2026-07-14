@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import case, func, text
@@ -50,11 +51,12 @@ def _owned_feed(feed_id: int, user: User, db: Session) -> Feed:
     return feed
 
 
-def _batch_counts(feed_ids: list[int], db: Session) -> dict[int, tuple[int, int]]:
-    """Single SQL query → {feed_id: (article_count, unread_count)}.
+def _batch_counts(feed_ids: list[int], db: Session) -> dict[int, tuple[int, int, datetime | None]]:
+    """Single SQL query → {feed_id: (article_count, unread_count, last_read_at)}.
 
     Replaces the previous 2-queries-per-feed N+1 pattern in _build_feed_response.
     On a 25-feed account this cuts GET /feeds from ~75 queries down to 3.
+    last_read_at feeds the unsubscribe-suggestion heuristic below.
     """
     if not feed_ids:
         return {}
@@ -62,20 +64,40 @@ def _batch_counts(feed_ids: list[int], db: Session) -> dict[int, tuple[int, int]
         text("""
             SELECT feed_id,
                    COUNT(*)                              AS total,
-                   COUNT(*) FILTER (WHERE is_read = false) AS unread
+                   COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                   MAX(read_at)                           AS last_read_at
             FROM   articles
             WHERE  feed_id = ANY(:ids)
             GROUP  BY feed_id
         """),
         {"ids": feed_ids},
     ).fetchall()
-    return {r.feed_id: (int(r.total), int(r.unread)) for r in rows}
+    return {r.feed_id: (int(r.total), int(r.unread), r.last_read_at) for r in rows}
 
 
-def _to_feed_response(feed: Feed, article_count: int, unread_count: int) -> FeedResponse:
+_UNSUBSCRIBE_SUGGESTION_DAYS = 30
+
+
+def _suggest_unsubscribe(feed: Feed, article_count: int, last_read_at: datetime | None) -> bool:
+    """Flag feeds that have accumulated articles nobody has read in a month.
+
+    Requires the subscription itself to be at least as old as the threshold,
+    so a feed added last week with unread articles isn't flagged prematurely.
+    """
+    if article_count == 0:
+        return False
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=_UNSUBSCRIBE_SUGGESTION_DAYS)
+    if feed.created_at > cutoff:
+        return False
+    return last_read_at is None or last_read_at < cutoff
+
+
+def _to_feed_response(feed: Feed, article_count: int, unread_count: int, last_read_at: datetime | None = None) -> FeedResponse:
     data = FeedResponse.model_validate(feed)
     data.article_count = article_count
     data.unread_count = unread_count
+    data.suggest_unsubscribe = _suggest_unsubscribe(feed, article_count, last_read_at)
     data.categories = [
         CategoryResponse(id=c.id, name=c.name, created_at=c.created_at)
         for c in feed.categories
@@ -86,15 +108,15 @@ def _to_feed_response(feed: Feed, article_count: int, unread_count: int) -> Feed
 def _build_feed_response(feed: Feed, db: Session) -> FeedResponse:
     """Single-feed path (create / update / snooze / get). Uses batch helper for consistency."""
     counts = _batch_counts([feed.id], db)
-    article_count, unread_count = counts.get(feed.id, (0, 0))
-    return _to_feed_response(feed, article_count, unread_count)
+    article_count, unread_count, last_read_at = counts.get(feed.id, (0, 0, None))
+    return _to_feed_response(feed, article_count, unread_count, last_read_at)
 
 
 def _build_feed_list(feeds: list[Feed], db: Session) -> list[FeedResponse]:
     """Multi-feed path. Fetches all counts in one query instead of 2N queries."""
     counts = _batch_counts([f.id for f in feeds], db)
     return [
-        _to_feed_response(f, *counts.get(f.id, (0, 0)))
+        _to_feed_response(f, *counts.get(f.id, (0, 0, None)))
         for f in feeds
     ]
 
@@ -233,6 +255,10 @@ def update_feed(
         feed.is_active = payload.is_active
     if payload.category_ids is not None:
         _apply_categories(feed, payload.category_ids, current_user, db)
+    if payload.auto_mark_read is not None:
+        feed.auto_mark_read = payload.auto_mark_read
+    if payload.default_open_action is not None:
+        feed.default_open_action = payload.default_open_action
     if payload.importance_tier is not None:
         feed.importance_tier = payload.importance_tier
     db.commit()

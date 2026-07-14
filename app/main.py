@@ -226,6 +226,10 @@ def _migrate() -> None:
             # Plugin system — track which plugin handles each feed
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS plugin_name VARCHAR(64)",
             "CREATE INDEX IF NOT EXISTS ix_feeds_plugin_name ON feeds (plugin_name) WHERE plugin_name IS NOT NULL",
+            # Per-feed setting: auto-mark ingested articles as read instead of unread
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS auto_mark_read BOOLEAN NOT NULL DEFAULT FALSE",
+            # Per-feed setting: what clicking an article in this feed does (reader|original|list)
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS default_open_action VARCHAR(16) NOT NULL DEFAULT 'reader'",
             # Per-feed importance tier — drives sort order and badge emphasis
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
         ]
