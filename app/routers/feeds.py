@@ -263,6 +263,8 @@ def update_feed(
         feed.importance_tier = payload.importance_tier
     if payload.manual_refresh_only is not None:
         feed.manual_refresh_only = payload.manual_refresh_only
+    if payload.note is not None:
+        feed.note = payload.note.strip() or None
     if payload.color is not None:
         feed.color = payload.color or None
     if payload.icon_url is not None:
