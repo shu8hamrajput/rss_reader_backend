@@ -307,12 +307,24 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict, cached_webh
 
 # ── Celery tasks ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+def _is_due_for_refresh(feed: Feed, now: datetime) -> bool:
+    """True unless the feed has a custom refresh_interval_minutes override that hasn't elapsed yet."""
+    if not feed.refresh_interval_minutes or not feed.last_fetched_at:
+        return True
+    elapsed_minutes = (now - feed.last_fetched_at).total_seconds() / 60
+    return elapsed_minutes >= feed.refresh_interval_minutes
+
+
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
-    """Refresh every active feed (except manual-only ones), grouped by URL so shared feeds are fetched once."""
+    """Refresh every active, due feed (except manual-only ones), grouped by URL so shared feeds are fetched once."""
     db = SessionLocal()
     try:
-        feeds = db.query(Feed).filter(Feed.is_active == True, Feed.manual_refresh_only == False).all()
+        now = datetime.now(timezone.utc)
+        feeds = [
+            f for f in db.query(Feed).filter(Feed.is_active == True, Feed.manual_refresh_only == False).all()
+            if _is_due_for_refresh(f, now)
+        ]
 
         url_groups: dict[str, list[Feed]] = defaultdict(list)
         for feed in feeds:

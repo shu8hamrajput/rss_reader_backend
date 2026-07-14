@@ -130,6 +130,9 @@ class Feed(Base):
     # user's other feeds are skipped on ingest — for aggregators/syndicators that
     # repost content the user already follows at its original source.
     suppress_duplicates: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+    # Overrides the global ~30-minute beat cadence for this feed specifically.
+    # Null means "use the global default" — the beat schedule refreshes it every cycle.
+    refresh_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

@@ -358,3 +358,27 @@ def test_update_feed_suppress_duplicates(client, db_session, user, auth_headers)
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"suppress_duplicates": True}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["suppress_duplicates"] is True
+
+
+def test_update_feed_refresh_interval_minutes(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.refresh_interval_minutes is None
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"refresh_interval_minutes": 120}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["refresh_interval_minutes"] == 120
+
+
+def test_update_feed_refresh_interval_minutes_zero_clears_override(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, refresh_interval_minutes=120)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"refresh_interval_minutes": 0}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["refresh_interval_minutes"] is None
+
+
+def test_update_feed_refresh_interval_minutes_rejects_out_of_range(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"refresh_interval_minutes": 5}, headers=auth_headers)
+    assert resp.status_code == 422
