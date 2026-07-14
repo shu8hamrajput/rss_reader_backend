@@ -12,6 +12,7 @@ from app.plugins.base import ParsedArticle, ParsedFeed
 from app.plugins.default import _get_content, _get_thumbnail, _parse_date
 from app.services.feed_parser import (
     _apply_feed_meta,
+    _strip_tracking_params,
     _write_articles,
     refresh_feed,
     refresh_url_for_all_subscribers,
@@ -201,6 +202,45 @@ def test_write_articles_auto_mark_read_marks_new_articles_read(db_session, user)
     article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
     assert article.is_read is True
     assert article.read_at is not None
+
+
+# ── _strip_tracking_params ───────────────────────────────────────────────────
+
+def test_strip_tracking_params_removes_utm_and_click_ids():
+    url = "https://example.com/article?utm_source=newsletter&utm_medium=email&fbclid=abc123&id=42"
+    assert _strip_tracking_params(url) == "https://example.com/article?id=42"
+
+
+def test_strip_tracking_params_leaves_clean_url_untouched():
+    url = "https://example.com/article?id=42"
+    assert _strip_tracking_params(url) == url
+
+
+def test_strip_tracking_params_leaves_no_query_untouched():
+    url = "https://example.com/article"
+    assert _strip_tracking_params(url) == url
+
+
+def test_strip_tracking_params_drops_query_entirely_when_all_tracking():
+    url = "https://example.com/article?utm_source=x&gclid=y"
+    assert _strip_tracking_params(url) == "https://example.com/article"
+
+
+def test_strip_tracking_params_handles_none():
+    assert _strip_tracking_params(None) is None
+
+
+def test_write_articles_strips_tracking_params_from_url(db_session, user):
+    feed = make_feed(db_session, user)
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="g1", title="Article", url="https://example.com/a?utm_source=rss&id=1"),
+    ])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.url == "https://example.com/a?id=1"
 
 
 # ── _apply_feed_meta ─────────────────────────────────────────────────────────

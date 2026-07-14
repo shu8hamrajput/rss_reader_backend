@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,29 @@ from ..plugins import plugin_registry
 from ..plugins.base import ParsedFeed
 
 logger = logging.getLogger(__name__)
+
+_TRACKING_PARAM_PREFIXES = ("utm_",)
+_TRACKING_PARAMS = {
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_cid", "mc_eid",
+    "igshid", "igsh", "ref_src", "_hsenc", "_hsmi", "mkt_tok", "vero_id",
+    "yclid", "ocid", "wt_zmc", "spm",
+}
+
+
+def _strip_tracking_params(url: str | None) -> str | None:
+    """Strip known analytics/tracking query params, leaving the rest of the URL untouched."""
+    if not url:
+        return url
+    split = urlsplit(url)
+    if not split.query:
+        return url
+    kept = [
+        (k, v) for k, v in parse_qsl(split.query, keep_blank_values=True)
+        if not k.lower().startswith(_TRACKING_PARAM_PREFIXES) and k.lower() not in _TRACKING_PARAMS
+    ]
+    if len(kept) == len(parse_qsl(split.query, keep_blank_values=True)):
+        return url
+    return urlunsplit(split._replace(query=urlencode(kept)))
 
 
 def _apply_feed_meta(feed: Feed, parsed: ParsedFeed, plugin_name: str) -> None:
@@ -56,7 +80,7 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
         if not art.guid or art.guid in existing_guids:
             continue
         db.add(Article(
-            feed_id=feed.id, guid=art.guid, title=art.title, url=art.url,
+            feed_id=feed.id, guid=art.guid, title=art.title, url=_strip_tracking_params(art.url),
             author=art.author, summary=art.summary, content=art.content,
             full_content=art.full_content, thumbnail_url=art.thumbnail_url,
             published_at=art.published_at, media_type=art.media_type,
