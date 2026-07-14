@@ -243,6 +243,8 @@ class FeedResponse(BaseModel):
     plugin_name: str | None = None
     auto_mark_read: bool = False
     default_open_action: str = "reader"
+    # Computed: True when the feed has unread articles nobody has read in 30+ days
+    suggest_unsubscribe: bool = False
 
     @model_validator(mode="after")
     def compute_health_status(self) -> "FeedResponse":
