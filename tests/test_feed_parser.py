@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +13,8 @@ from app.plugins.base import ParsedArticle, ParsedFeed
 from app.plugins.default import _get_content, _get_thumbnail, _parse_date
 from app.services.feed_parser import (
     _apply_feed_meta,
+    _matches_any_keyword,
+    _parse_keywords,
     _write_articles,
     refresh_feed,
     refresh_url_for_all_subscribers,
@@ -291,6 +294,66 @@ def test_write_articles_keeps_transcript_even_when_auto_full_content_disabled(db
     articles = {a.guid: a for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
     assert articles["g1"].full_content == "transcript text"
     assert articles["g2"].full_content == "video transcript"
+
+
+# ── keyword mute/boost ────────────────────────────────────────────────────────
+
+def test_parse_keywords_splits_lowercases_and_drops_blanks():
+    assert _parse_keywords("Politics, , Crypto ,AI") == ["politics", "crypto", "ai"]
+
+
+def test_parse_keywords_none_returns_empty():
+    assert _parse_keywords(None) == []
+
+
+def test_matches_any_keyword_checks_title_and_summary():
+    art = ParsedArticle(guid="g1", title="Big Crypto Crash", summary="markets in turmoil")
+    assert _matches_any_keyword(art, ["crypto"]) is True
+    assert _matches_any_keyword(art, ["turmoil"]) is True
+    assert _matches_any_keyword(art, ["politics"]) is False
+
+
+def test_matches_any_keyword_empty_list_never_matches():
+    art = ParsedArticle(guid="g1", title="Anything")
+    assert _matches_any_keyword(art, []) is False
+
+
+def test_write_articles_mutes_matching_title(db_session, user):
+    feed = make_feed(db_session, user, mute_keywords="crypto, politics")
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="g1", title="Crypto prices crash"),
+        ParsedArticle(guid="g2", title="Local weather update"),
+    ])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+    guids = {a.guid for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert guids == {"g2"}
+
+
+def test_write_articles_boosts_matching_title_with_tag(db_session, user):
+    feed = make_feed(db_session, user, boost_keywords="breaking")
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Breaking: big news")])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert json.loads(article.tags) == ["boosted"]
+
+
+def test_write_articles_no_keywords_configured_unaffected(db_session, user):
+    feed = make_feed(db_session, user, mute_keywords=None, boost_keywords=None)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Anything at all")])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.tags is None
 
 
 # ── _apply_feed_meta ─────────────────────────────────────────────────────────

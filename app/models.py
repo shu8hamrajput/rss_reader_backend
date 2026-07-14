@@ -143,6 +143,11 @@ class Feed(Base):
     # deliveries — for high-volume/low-priority feeds where instant push isn't
     # wanted. SSE live-notification and alert matching are unaffected.
     webhook_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default='true')
+    # Comma-separated keywords. Mute: matching new articles (title/summary,
+    # case-insensitive substring) are skipped entirely on ingest. Boost: matching
+    # articles get a "boosted" tag added instead of being filtered.
+    mute_keywords: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    boost_keywords: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

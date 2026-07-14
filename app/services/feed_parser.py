@@ -34,6 +34,19 @@ def _normalize_title(title: str | None) -> str:
     return re.sub(r"\s+", " ", title).strip().lower()
 
 
+def _parse_keywords(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [kw.strip().lower() for kw in raw.split(",") if kw.strip()]
+
+
+def _matches_any_keyword(art: ParsedArticle, keywords: list[str]) -> bool:
+    if not keywords:
+        return False
+    haystack = f"{art.title or ''} {art.summary or ''}".lower()
+    return any(kw in haystack for kw in keywords)
+
+
 def _apply_feed_meta(feed: Feed, parsed: ParsedFeed, plugin_name: str) -> None:
     if parsed.etag:
         feed.etag = parsed.etag
@@ -77,6 +90,8 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     # Feeds with auto_mark_read skip the unread inbox entirely — for low-signal
     # feeds skimmed via smart views but never opened individually.
     read_at = datetime.now(timezone.utc) if feed.auto_mark_read else None
+    mute_keywords = _parse_keywords(feed.mute_keywords)
+    boost_keywords = _parse_keywords(feed.boost_keywords)
     new_count = 0
     for art in parsed.articles:
         if not art.guid or art.guid in existing_guids:
@@ -85,6 +100,13 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
             normalized = _normalize_title(art.title)
             if normalized and normalized in seen_titles:
                 continue
+        # mute_keywords drops the article on ingest entirely — checked before
+        # boost, since a title matching both is a signal the user wants gone.
+        if _matches_any_keyword(art, mute_keywords):
+            continue
+        tags = list(art.tags)
+        if _matches_any_keyword(art, boost_keywords) and "boosted" not in tags:
+            tags.append("boosted")
         # auto_full_content=False withholds the scraped article page at ingest —
         # the reader fetches it on demand via refetch/save-later instead. Doesn't
         # apply to transcripts, which are a separate enrichment.
@@ -97,7 +119,7 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
             published_at=art.published_at, media_type=art.media_type,
             media_url=art.media_url, duration_seconds=art.duration_seconds,
             episode_number=art.episode_number, itunes_author=art.itunes_author,
-            tags=json.dumps(art.tags) if art.tags else None,
+            tags=json.dumps(tags) if tags else None,
             is_read=feed.auto_mark_read, read_at=read_at,
         ))
         existing_guids.add(art.guid)

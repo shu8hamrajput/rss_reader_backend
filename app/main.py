@@ -253,6 +253,9 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS max_articles_retained INTEGER",
             # Per-feed opt-out from "new_article" webhook delivery; SSE/alerts unaffected
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS webhook_eligible BOOLEAN NOT NULL DEFAULT TRUE",
+            # Comma-separated keyword lists for per-feed mute (skip on ingest) / boost (tag) filtering
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS mute_keywords VARCHAR(500)",
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS boost_keywords VARCHAR(500)",
         ]
         for stmt in stmts:
             try:
