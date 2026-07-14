@@ -119,6 +119,8 @@ class Feed(Base):
     # Once true, _apply_feed_meta stops overwriting icon_url from the source feed —
     # set automatically when the user provides a custom icon_url via PATCH
     icon_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+    # Pinned feeds surface above category ordering regardless of which folder they're in
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

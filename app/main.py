@@ -239,6 +239,8 @@ def _migrate() -> None:
             # User-chosen accent color and custom-icon lock flag
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS color VARCHAR(7)",
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS icon_locked BOOLEAN NOT NULL DEFAULT FALSE",
+            # Pinned feeds surface above category ordering regardless of folder
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
         ]
         for stmt in stmts:
             try:
