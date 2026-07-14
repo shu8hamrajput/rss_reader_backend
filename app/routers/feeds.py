@@ -266,6 +266,11 @@ def update_feed(
         feed.manual_refresh_only = payload.manual_refresh_only
     if payload.note is not None:
         feed.note = payload.note.strip() or None
+    if payload.color is not None:
+        feed.color = payload.color or None
+    if payload.icon_url is not None:
+        feed.icon_url = payload.icon_url
+        feed.icon_locked = True
     if payload.pinned is not None:
         feed.pinned = payload.pinned
     db.commit()

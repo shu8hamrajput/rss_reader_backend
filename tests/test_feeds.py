@@ -174,6 +174,42 @@ def test_update_feed_note_rejects_too_long(client, db_session, user, auth_header
     assert resp.status_code == 422
 
 
+def test_update_feed_color(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.color is None
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"color": "#3B82F6"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["color"] == "#3B82F6"
+
+
+def test_update_feed_color_rejects_invalid_format(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"color": "blue"}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
+def test_update_feed_color_empty_string_clears_it(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, color="#3B82F6")
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"color": ""}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["color"] is None
+
+
+def test_update_feed_icon_url_locks_it_against_auto_refresh(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, icon_url="https://example.com/auto-icon.png")
+    assert feed.icon_locked is False
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"icon_url": "https://example.com/custom-icon.png"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["icon_url"] == "https://example.com/custom-icon.png"
+
+    db_session.refresh(feed)
+    assert feed.icon_locked is True
+
+
 def test_list_feeds_orders_by_importance_tier(client, db_session, user, auth_headers):
     archive = make_feed(db_session, user, title="Archive Feed", importance_tier="archive_only")
     casual = make_feed(db_session, user, title="Casual Feed", importance_tier="casual")

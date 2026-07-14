@@ -114,6 +114,11 @@ class Feed(Base):
     manual_refresh_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
     # User's freeform note on why they follow this feed — an aid for later pruning decisions
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # User-chosen accent color for sidebar/list grouping, hex like "#3b82f6"
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    # Once true, _apply_feed_meta stops overwriting icon_url from the source feed —
+    # set automatically when the user provides a custom icon_url via PATCH
+    icon_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
     # Pinned feeds surface above category ordering regardless of which folder they're in
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
