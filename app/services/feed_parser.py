@@ -48,6 +48,9 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     existing_guids: set[str] = {
         row[0] for row in db.query(Article.guid).filter(Article.feed_id == feed.id).all()
     }
+    # Feeds with auto_mark_read skip the unread inbox entirely — for low-signal
+    # feeds skimmed via smart views but never opened individually.
+    read_at = datetime.now(timezone.utc) if feed.auto_mark_read else None
     new_count = 0
     for art in parsed.articles:
         if not art.guid or art.guid in existing_guids:
@@ -60,6 +63,7 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
             media_url=art.media_url, duration_seconds=art.duration_seconds,
             episode_number=art.episode_number, itunes_author=art.itunes_author,
             tags=json.dumps(art.tags) if art.tags else None,
+            is_read=feed.auto_mark_read, read_at=read_at,
         ))
         existing_guids.add(art.guid)
         new_count += 1

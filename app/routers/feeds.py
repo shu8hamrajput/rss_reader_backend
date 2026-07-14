@@ -226,6 +226,10 @@ def update_feed(
         feed.is_active = payload.is_active
     if payload.category_ids is not None:
         _apply_categories(feed, payload.category_ids, current_user, db)
+    if payload.auto_mark_read is not None:
+        feed.auto_mark_read = payload.auto_mark_read
+    if payload.default_open_action is not None:
+        feed.default_open_action = payload.default_open_action
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
