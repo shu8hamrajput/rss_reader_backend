@@ -309,10 +309,10 @@ def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict, cached_webh
 
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
-    """Refresh every active feed, grouped by URL so shared feeds are fetched once."""
+    """Refresh every active feed (except manual-only ones), grouped by URL so shared feeds are fetched once."""
     db = SessionLocal()
     try:
-        feeds = db.query(Feed).filter(Feed.is_active == True).all()
+        feeds = db.query(Feed).filter(Feed.is_active == True, Feed.manual_refresh_only == False).all()
 
         url_groups: dict[str, list[Feed]] = defaultdict(list)
         for feed in feeds:

@@ -261,6 +261,8 @@ def update_feed(
         feed.default_open_action = payload.default_open_action
     if payload.importance_tier is not None:
         feed.importance_tier = payload.importance_tier
+    if payload.manual_refresh_only is not None:
+        feed.manual_refresh_only = payload.manual_refresh_only
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
