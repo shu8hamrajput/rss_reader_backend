@@ -213,6 +213,7 @@ class FeedUpdate(BaseModel):
     default_open_action: str | None = None
     importance_tier: str | None = None
     manual_refresh_only: bool | None = None
+    pinned: bool | None = None
 
     @field_validator("default_open_action")
     @classmethod
@@ -255,6 +256,7 @@ class FeedResponse(BaseModel):
     default_open_action: str = "reader"
     importance_tier: str = "casual"
     manual_refresh_only: bool = False
+    pinned: bool = False
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 

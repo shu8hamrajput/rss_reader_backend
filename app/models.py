@@ -112,6 +112,8 @@ class Feed(Base):
     importance_tier: Mapped[str] = mapped_column(String(16), default="casual", nullable=False, server_default="'casual'")
     # Excludes this feed from the scheduled Celery beat refresh — only fetched via manual "Refresh now"
     manual_refresh_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+    # Pinned feeds surface above category ordering regardless of which folder they're in
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

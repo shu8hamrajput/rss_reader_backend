@@ -161,6 +161,25 @@ def test_list_feeds_orders_by_importance_tier(client, db_session, user, auth_hea
     assert ids.index(must_read.id) < ids.index(casual.id) < ids.index(archive.id)
 
 
+def test_update_feed_pinned(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.pinned is False
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"pinned": True}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["pinned"] is True
+
+
+def test_list_feeds_pinned_surfaces_above_importance_tier(client, db_session, user, auth_headers):
+    must_read = make_feed(db_session, user, title="Must Read Feed", importance_tier="must_read")
+    pinned_archive = make_feed(db_session, user, title="Pinned Archive Feed", importance_tier="archive_only", pinned=True)
+
+    resp = client.get("/api/v1/feeds", headers=auth_headers)
+    assert resp.status_code == 200
+    ids = [f["id"] for f in resp.json()["items"]]
+    assert ids.index(pinned_archive.id) < ids.index(must_read.id)
+
+
 def test_snooze_and_unsnooze_feed(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user, fetch_failure_count=5)
 

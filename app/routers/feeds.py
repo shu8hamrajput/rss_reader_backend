@@ -221,14 +221,15 @@ def list_feeds(
         q = q.filter(Feed.is_active == True)  # noqa: E712
     if category_id is not None:
         q = q.filter(Feed.categories.any(id=category_id))
-    # must_read first, then casual, then archive_only; created_at desc within each tier
+    # Pinned feeds always come first, regardless of importance tier or category;
+    # within each pinned/unpinned group: must_read, then casual, then archive_only.
     tier_order = case(
         (Feed.importance_tier == "must_read", 0),
         (Feed.importance_tier == "casual", 1),
         (Feed.importance_tier == "archive_only", 2),
         else_=1,
     )
-    feeds = q.order_by(tier_order, Feed.created_at.desc()).limit(500).all()
+    feeds = q.order_by(Feed.pinned.desc(), tier_order, Feed.created_at.desc()).limit(500).all()
     return FeedListResponse(total=len(feeds), items=_build_feed_list(feeds, db))
 
 
@@ -263,6 +264,8 @@ def update_feed(
         feed.importance_tier = payload.importance_tier
     if payload.manual_refresh_only is not None:
         feed.manual_refresh_only = payload.manual_refresh_only
+    if payload.pinned is not None:
+        feed.pinned = payload.pinned
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
