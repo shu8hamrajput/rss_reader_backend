@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.models import AlertMatch, ArticleRule, SearchAlert, UserWebhook
+from app.models import AlertMatch, Article, ArticleRule, Highlight, SearchAlert, UserWebhook
 from app.tasks import (
     _apply_rule_actions,
     _apply_rules,
@@ -15,6 +15,7 @@ from app.tasks import (
     _is_due_for_refresh,
     _jaccard,
     _match_alerts,
+    _prune_expired_articles,
     _tag_list,
     _tokenize,
     _update_feed_velocity,
@@ -114,6 +115,49 @@ def test_is_due_for_refresh_after_interval_elapsed_is_due(db_session, user):
     now = datetime.now(timezone.utc)
     feed = make_feed(db_session, user, refresh_interval_minutes=120, last_fetched_at=now - timedelta(minutes=121))
     assert _is_due_for_refresh(feed, now) is True
+
+
+def test_prune_expired_articles_deletes_past_retention_window(db_session, user):
+    feed = make_feed(db_session, user, retention_days=30)
+    old = make_article(db_session, feed, guid="old", created_at=datetime.now(timezone.utc) - timedelta(days=31))
+    recent = make_article(db_session, feed, guid="recent", created_at=datetime.now(timezone.utc) - timedelta(days=1))
+
+    deleted = _prune_expired_articles(db_session)
+
+    assert deleted == 1
+    remaining_guids = {a.guid for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert remaining_guids == {"recent"}
+
+
+def test_prune_expired_articles_keeps_bookmarked(db_session, user):
+    feed = make_feed(db_session, user, retention_days=30)
+    make_article(db_session, feed, guid="old-bookmarked", created_at=datetime.now(timezone.utc) - timedelta(days=60), is_bookmarked=True)
+
+    deleted = _prune_expired_articles(db_session)
+
+    assert deleted == 0
+    assert db_session.query(Article).filter(Article.feed_id == feed.id).count() == 1
+
+
+def test_prune_expired_articles_keeps_highlighted(db_session, user):
+    feed = make_feed(db_session, user, retention_days=30)
+    old = make_article(db_session, feed, guid="old-highlighted", created_at=datetime.now(timezone.utc) - timedelta(days=60))
+    db_session.add(Highlight(user_id=user.id, article_id=old.id, start_pos=0, end_pos=10, color_id=1))
+    db_session.commit()
+
+    deleted = _prune_expired_articles(db_session)
+
+    assert deleted == 0
+    assert db_session.query(Article).filter(Article.feed_id == feed.id).count() == 1
+
+
+def test_prune_expired_articles_ignores_feeds_without_retention(db_session, user):
+    feed = make_feed(db_session, user, retention_days=None)
+    make_article(db_session, feed, guid="ancient", created_at=datetime.now(timezone.utc) - timedelta(days=3650))
+
+    deleted = _prune_expired_articles(db_session)
+
+    assert deleted == 0
 
 
 def test_tag_list(db_session, user):

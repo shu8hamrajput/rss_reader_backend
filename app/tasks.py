@@ -17,11 +17,12 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
 from .config import settings
 from .database import SessionLocal
-from .models import AlertMatch, Article, ArticleRule, Feed, GeneratedCandidate, SearchAlert, UserWebhook
+from .models import AlertMatch, Article, ArticleRule, Feed, GeneratedCandidate, Highlight, SearchAlert, UserWebhook
 from .bus import event_bus as _event_bus
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
@@ -390,6 +391,44 @@ def refresh_all_feeds() -> None:
                 db.commit()
     except Exception as exc:
         logger.error("refresh_all_feeds task failed: %s", exc, exc_info=True)
+    finally:
+        db.close()
+
+
+def _prune_expired_articles(db: Session) -> int:
+    """Delete articles past their feed's retention_days window.
+
+    Bookmarked articles and articles with highlights are always kept regardless
+    of age — retention is meant to trim skimmed-and-forgotten volume, not
+    content the user has actively engaged with.
+    """
+    now = datetime.now(timezone.utc)
+    deleted = 0
+    for feed in db.query(Feed).filter(Feed.retention_days.isnot(None)).all():
+        cutoff = now - timedelta(days=feed.retention_days)
+        highlighted_ids = {
+            row[0] for row in db.query(Highlight.article_id)
+            .join(Article, Highlight.article_id == Article.id)
+            .filter(Article.feed_id == feed.id)
+            .all()
+        }
+        q = db.query(Article).filter(
+            Article.feed_id == feed.id,
+            Article.created_at < cutoff,
+            Article.is_bookmarked == False,
+        )
+        if highlighted_ids:
+            q = q.filter(~Article.id.in_(highlighted_ids))
+        deleted += q.delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
+@celery_app.task(name="app.tasks.prune_expired_articles")
+def prune_expired_articles() -> int:
+    db = SessionLocal()
+    try:
+        return _prune_expired_articles(db)
     finally:
         db.close()
 

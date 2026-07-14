@@ -382,3 +382,27 @@ def test_update_feed_refresh_interval_minutes_rejects_out_of_range(client, db_se
 
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"refresh_interval_minutes": 5}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+def test_update_feed_retention_days(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.retention_days is None
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"retention_days": 90}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["retention_days"] == 90
+
+
+def test_update_feed_retention_days_zero_clears_override(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, retention_days=90)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"retention_days": 0}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["retention_days"] is None
+
+
+def test_update_feed_retention_days_rejects_out_of_range(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"retention_days": 5000}, headers=auth_headers)
+    assert resp.status_code == 422
