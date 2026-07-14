@@ -230,6 +230,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS auto_mark_read BOOLEAN NOT NULL DEFAULT FALSE",
             # Per-feed setting: what clicking an article in this feed does (reader|original|list)
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS default_open_action VARCHAR(16) NOT NULL DEFAULT 'reader'",
+            # Per-feed importance tier — drives sort order and badge emphasis
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
         ]
         for stmt in stmts:
             try:

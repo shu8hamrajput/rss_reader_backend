@@ -201,6 +201,7 @@ class FeedCreate(BaseModel):
         return v.strip()
 
 
+VALID_IMPORTANCE_TIERS = {"must_read", "casual", "archive_only"}
 VALID_OPEN_ACTIONS = {"reader", "original", "list"}
 
 
@@ -210,12 +211,20 @@ class FeedUpdate(BaseModel):
     category_ids: list[int] | None = None
     auto_mark_read: bool | None = None
     default_open_action: str | None = None
+    importance_tier: str | None = None
 
     @field_validator("default_open_action")
     @classmethod
     def valid_open_action(cls, v: str | None) -> str | None:
         if v is not None and v not in VALID_OPEN_ACTIONS:
             raise ValueError(f"default_open_action must be one of {sorted(VALID_OPEN_ACTIONS)}")
+        return v
+
+    @field_validator("importance_tier")
+    @classmethod
+    def valid_importance_tier(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_IMPORTANCE_TIERS:
+            raise ValueError(f"importance_tier must be one of {sorted(VALID_IMPORTANCE_TIERS)}")
         return v
 
 
@@ -243,6 +252,7 @@ class FeedResponse(BaseModel):
     plugin_name: str | None = None
     auto_mark_read: bool = False
     default_open_action: str = "reader"
+    importance_tier: str = "casual"
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 

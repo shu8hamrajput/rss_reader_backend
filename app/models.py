@@ -108,6 +108,8 @@ class Feed(Base):
     auto_mark_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
     # What clicking an article from this feed does: "reader" | "original" | "list"
     default_open_action: Mapped[str] = mapped_column(String(16), default="reader", nullable=False, server_default="'reader'")
+    # User-set priority: "must_read" | "casual" | "archive_only" — drives sort order and badge emphasis
+    importance_tier: Mapped[str] = mapped_column(String(16), default="casual", nullable=False, server_default="'casual'")
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
