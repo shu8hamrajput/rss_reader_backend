@@ -133,6 +133,9 @@ class Feed(Base):
     # Overrides the global ~30-minute beat cadence for this feed specifically.
     # Null means "use the global default" — the beat schedule refreshes it every cycle.
     refresh_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When set, the daily prune task deletes this feed's articles older than N days —
+    # unless bookmarked or highlighted, which are always kept regardless of age.
+    retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

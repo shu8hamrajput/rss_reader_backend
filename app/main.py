@@ -247,6 +247,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS suppress_duplicates BOOLEAN NOT NULL DEFAULT FALSE",
             # Per-feed override of the global beat refresh cadence, in minutes; NULL = use global default
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS refresh_interval_minutes INTEGER",
+            # Per-feed retention window in days; NULL = keep articles indefinitely
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS retention_days INTEGER",
         ]
         for stmt in stmts:
             try:

@@ -31,5 +31,9 @@ celery_app.conf.update(
             "task": "app.tasks.refresh_all_feeds",
             "schedule": 30 * 60,  # every 30 minutes — matches the old APScheduler interval
         },
+        "prune-expired-articles": {
+            "task": "app.tasks.prune_expired_articles",
+            "schedule": 24 * 60 * 60,  # once a day — retention is a slow-moving setting, no need for finer cadence
+        },
     },
 )

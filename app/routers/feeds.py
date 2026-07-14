@@ -279,6 +279,8 @@ def update_feed(
         feed.suppress_duplicates = payload.suppress_duplicates
     if payload.refresh_interval_minutes is not None:
         feed.refresh_interval_minutes = payload.refresh_interval_minutes or None
+    if payload.retention_days is not None:
+        feed.retention_days = payload.retention_days or None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
