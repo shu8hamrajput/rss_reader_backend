@@ -406,3 +406,27 @@ def test_update_feed_retention_days_rejects_out_of_range(client, db_session, use
 
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"retention_days": 5000}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+def test_update_feed_max_articles_retained(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.max_articles_retained is None
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"max_articles_retained": 500}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["max_articles_retained"] == 500
+
+
+def test_update_feed_max_articles_retained_zero_clears_override(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, max_articles_retained=500)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"max_articles_retained": 0}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["max_articles_retained"] is None
+
+
+def test_update_feed_max_articles_retained_rejects_out_of_range(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"max_articles_retained": 5}, headers=auth_headers)
+    assert resp.status_code == 422

@@ -281,6 +281,8 @@ def update_feed(
         feed.refresh_interval_minutes = payload.refresh_interval_minutes or None
     if payload.retention_days is not None:
         feed.retention_days = payload.retention_days or None
+    if payload.max_articles_retained is not None:
+        feed.max_articles_retained = payload.max_articles_retained or None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

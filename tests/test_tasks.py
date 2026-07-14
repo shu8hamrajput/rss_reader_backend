@@ -15,6 +15,7 @@ from app.tasks import (
     _is_due_for_refresh,
     _jaccard,
     _match_alerts,
+    _prune_excess_articles,
     _prune_expired_articles,
     _tag_list,
     _tokenize,
@@ -156,6 +157,53 @@ def test_prune_expired_articles_ignores_feeds_without_retention(db_session, user
     make_article(db_session, feed, guid="ancient", created_at=datetime.now(timezone.utc) - timedelta(days=3650))
 
     deleted = _prune_expired_articles(db_session)
+
+    assert deleted == 0
+
+
+def test_prune_excess_articles_evicts_oldest_beyond_cap(db_session, user):
+    feed = make_feed(db_session, user, max_articles_retained=2)
+    oldest = make_article(db_session, feed, guid="oldest", created_at=datetime.now(timezone.utc) - timedelta(days=3))
+    middle = make_article(db_session, feed, guid="middle", created_at=datetime.now(timezone.utc) - timedelta(days=2))
+    newest = make_article(db_session, feed, guid="newest", created_at=datetime.now(timezone.utc) - timedelta(days=1))
+
+    deleted = _prune_excess_articles(db_session)
+
+    assert deleted == 1
+    remaining_guids = {a.guid for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert remaining_guids == {"middle", "newest"}
+
+
+def test_prune_excess_articles_keeps_bookmarked_out_of_cap(db_session, user):
+    feed = make_feed(db_session, user, max_articles_retained=1)
+    make_article(db_session, feed, guid="bookmarked", created_at=datetime.now(timezone.utc) - timedelta(days=10), is_bookmarked=True)
+    make_article(db_session, feed, guid="newest", created_at=datetime.now(timezone.utc) - timedelta(days=1))
+
+    deleted = _prune_excess_articles(db_session)
+
+    assert deleted == 0
+    assert db_session.query(Article).filter(Article.feed_id == feed.id).count() == 2
+
+
+def test_prune_excess_articles_keeps_highlighted_out_of_cap(db_session, user):
+    feed = make_feed(db_session, user, max_articles_retained=1)
+    old = make_article(db_session, feed, guid="highlighted", created_at=datetime.now(timezone.utc) - timedelta(days=10))
+    db_session.add(Highlight(user_id=user.id, article_id=old.id, start_pos=0, end_pos=10, color_id=1))
+    make_article(db_session, feed, guid="newest", created_at=datetime.now(timezone.utc) - timedelta(days=1))
+    db_session.commit()
+
+    deleted = _prune_excess_articles(db_session)
+
+    assert deleted == 0
+    assert db_session.query(Article).filter(Article.feed_id == feed.id).count() == 2
+
+
+def test_prune_excess_articles_ignores_feeds_without_cap(db_session, user):
+    feed = make_feed(db_session, user, max_articles_retained=None)
+    for i in range(5):
+        make_article(db_session, feed, guid=f"g{i}")
+
+    deleted = _prune_excess_articles(db_session)
 
     assert deleted == 0
 

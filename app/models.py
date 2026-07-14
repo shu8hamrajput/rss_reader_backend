@@ -136,6 +136,9 @@ class Feed(Base):
     # When set, the daily prune task deletes this feed's articles older than N days —
     # unless bookmarked or highlighted, which are always kept regardless of age.
     retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When set, the daily prune task keeps only the newest N non-bookmarked,
+    # non-highlighted articles for this feed — evicting the oldest excess.
+    max_articles_retained: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
