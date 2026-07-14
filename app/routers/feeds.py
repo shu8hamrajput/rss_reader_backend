@@ -285,6 +285,10 @@ def update_feed(
         feed.max_articles_retained = payload.max_articles_retained or None
     if payload.webhook_eligible is not None:
         feed.webhook_eligible = payload.webhook_eligible
+    if payload.mute_keywords is not None:
+        feed.mute_keywords = payload.mute_keywords.strip() or None
+    if payload.boost_keywords is not None:
+        feed.boost_keywords = payload.boost_keywords.strip() or None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

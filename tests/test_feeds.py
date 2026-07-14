@@ -439,3 +439,33 @@ def test_update_feed_webhook_eligible(client, db_session, user, auth_headers):
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"webhook_eligible": False}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["webhook_eligible"] is False
+
+
+def test_update_feed_mute_and_boost_keywords(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.mute_keywords is None
+    assert feed.boost_keywords is None
+
+    resp = client.patch(
+        f"/api/v1/feeds/{feed.id}",
+        json={"mute_keywords": "crypto, politics", "boost_keywords": "breaking"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["mute_keywords"] == "crypto, politics"
+    assert resp.json()["boost_keywords"] == "breaking"
+
+
+def test_update_feed_keywords_empty_string_clears(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, mute_keywords="crypto")
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"mute_keywords": ""}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["mute_keywords"] is None
+
+
+def test_update_feed_keywords_rejects_too_long(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"mute_keywords": "x" * 501}, headers=auth_headers)
+    assert resp.status_code == 422

@@ -224,6 +224,15 @@ class FeedUpdate(BaseModel):
     retention_days: int | None = None
     max_articles_retained: int | None = None
     webhook_eligible: bool | None = None
+    mute_keywords: str | None = None
+    boost_keywords: str | None = None
+
+    @field_validator("mute_keywords", "boost_keywords")
+    @classmethod
+    def keywords_max_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 500:
+            raise ValueError("keyword list must be 500 characters or fewer")
+        return v
 
     @field_validator("refresh_interval_minutes")
     @classmethod
@@ -313,6 +322,8 @@ class FeedResponse(BaseModel):
     retention_days: int | None = None
     max_articles_retained: int | None = None
     webhook_eligible: bool = True
+    mute_keywords: str | None = None
+    boost_keywords: str | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
