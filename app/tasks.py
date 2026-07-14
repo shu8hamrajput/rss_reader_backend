@@ -382,6 +382,7 @@ def refresh_all_feeds() -> None:
                             "user_id": feed.user_id,
                             "feed_id": feed.id,
                             "count":   new_count,
+                            "webhook_eligible": feed.webhook_eligible,
                         })
                 db.commit()
             except Exception as exc:
@@ -502,6 +503,7 @@ def refresh_feed_by_id(feed_id: int) -> int:
                     "user_id": feed.user_id,
                     "feed_id": feed.id,
                     "count":   new_count,
+                    "webhook_eligible": feed.webhook_eligible,
                 })
                 db.commit()
             return new_count

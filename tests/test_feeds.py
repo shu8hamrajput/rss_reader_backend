@@ -430,3 +430,12 @@ def test_update_feed_max_articles_retained_rejects_out_of_range(client, db_sessi
 
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"max_articles_retained": 5}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+def test_update_feed_webhook_eligible(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.webhook_eligible is True
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"webhook_eligible": False}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["webhook_eligible"] is False

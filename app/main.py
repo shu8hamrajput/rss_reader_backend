@@ -251,6 +251,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS retention_days INTEGER",
             # Per-feed cap on articles retained; NULL = no cap
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS max_articles_retained INTEGER",
+            # Per-feed opt-out from "new_article" webhook delivery; SSE/alerts unaffected
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS webhook_eligible BOOLEAN NOT NULL DEFAULT TRUE",
         ]
         for stmt in stmts:
             try:

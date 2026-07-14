@@ -139,6 +139,10 @@ class Feed(Base):
     # When set, the daily prune task keeps only the newest N non-bookmarked,
     # non-highlighted articles for this feed — evicting the oldest excess.
     max_articles_retained: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When False, new articles from this feed never trigger "new_article" webhook
+    # deliveries — for high-volume/low-priority feeds where instant push isn't
+    # wanted. SSE live-notification and alert matching are unaffected.
+    webhook_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default='true')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

@@ -223,6 +223,7 @@ class FeedUpdate(BaseModel):
     refresh_interval_minutes: int | None = None
     retention_days: int | None = None
     max_articles_retained: int | None = None
+    webhook_eligible: bool | None = None
 
     @field_validator("refresh_interval_minutes")
     @classmethod
@@ -311,6 +312,7 @@ class FeedResponse(BaseModel):
     refresh_interval_minutes: int | None = None
     retention_days: int | None = None
     max_articles_retained: int | None = None
+    webhook_eligible: bool = True
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
