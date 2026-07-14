@@ -201,10 +201,22 @@ class FeedCreate(BaseModel):
         return v.strip()
 
 
+VALID_OPEN_ACTIONS = {"reader", "original", "list"}
+
+
 class FeedUpdate(BaseModel):
     title: str | None = None
     is_active: bool | None = None
     category_ids: list[int] | None = None
+    auto_mark_read: bool | None = None
+    default_open_action: str | None = None
+
+    @field_validator("default_open_action")
+    @classmethod
+    def valid_open_action(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_OPEN_ACTIONS:
+            raise ValueError(f"default_open_action must be one of {sorted(VALID_OPEN_ACTIONS)}")
+        return v
 
 
 class FeedResponse(BaseModel):
@@ -229,6 +241,8 @@ class FeedResponse(BaseModel):
     unread_count: int = 0
     categories: list[CategoryResponse] = []
     plugin_name: str | None = None
+    auto_mark_read: bool = False
+    default_open_action: str = "reader"
 
     @model_validator(mode="after")
     def compute_health_status(self) -> "FeedResponse":

@@ -179,6 +179,30 @@ def test_write_articles_dedupes_within_same_batch(db_session, user):
     assert new_count == 1
 
 
+def test_write_articles_defaults_to_unread(db_session, user):
+    feed = make_feed(db_session, user, auto_mark_read=False)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Article")])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.is_read is False
+    assert article.read_at is None
+
+
+def test_write_articles_auto_mark_read_marks_new_articles_read(db_session, user):
+    feed = make_feed(db_session, user, auto_mark_read=True)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Article")])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.is_read is True
+    assert article.read_at is not None
+
+
 # ── _apply_feed_meta ─────────────────────────────────────────────────────────
 
 def test_apply_feed_meta_sets_title_only_when_absent(db_session, user):

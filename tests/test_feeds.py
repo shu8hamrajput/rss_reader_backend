@@ -99,6 +99,31 @@ def test_update_feed_category_not_owned_returns_404(client, db_session, user, ot
     assert resp.status_code == 404
 
 
+def test_update_feed_auto_mark_read(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.auto_mark_read is False
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"auto_mark_read": True}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["auto_mark_read"] is True
+
+
+def test_update_feed_default_open_action(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.default_open_action == "reader"
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"default_open_action": "original"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["default_open_action"] == "original"
+
+
+def test_update_feed_default_open_action_rejects_invalid_value(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"default_open_action": "bogus"}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
 def test_snooze_and_unsnooze_feed(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user, fetch_failure_count=5)
 

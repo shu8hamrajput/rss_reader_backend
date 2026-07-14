@@ -104,6 +104,10 @@ class Feed(Base):
     articles_per_day_avg: Mapped[Optional[float]] = mapped_column(nullable=True)
     # Which plugin handles this feed (set on first successful fetch)
     plugin_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Auto-mark ingested articles as read instead of unread — for low-signal feeds skimmed but never opened
+    auto_mark_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+    # What clicking an article from this feed does: "reader" | "original" | "list"
+    default_open_action: Mapped[str] = mapped_column(String(16), default="reader", nullable=False, server_default="'reader'")
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
