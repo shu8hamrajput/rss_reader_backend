@@ -245,6 +245,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS auto_full_content BOOLEAN NOT NULL DEFAULT TRUE",
             # Skip new articles whose title duplicates one already ingested from another of this user's feeds
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS suppress_duplicates BOOLEAN NOT NULL DEFAULT FALSE",
+            # Per-feed override of the global beat refresh cadence, in minutes; NULL = use global default
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS refresh_interval_minutes INTEGER",
         ]
         for stmt in stmts:
             try:

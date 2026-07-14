@@ -220,6 +220,15 @@ class FeedUpdate(BaseModel):
     pinned: bool | None = None
     auto_full_content: bool | None = None
     suppress_duplicates: bool | None = None
+    refresh_interval_minutes: int | None = None
+
+    @field_validator("refresh_interval_minutes")
+    @classmethod
+    def valid_refresh_interval(cls, v: int | None) -> int | None:
+        # 0 is accepted as a "clear the override, use the global default" sentinel.
+        if v is not None and v != 0 and not (15 <= v <= 10080):
+            raise ValueError("refresh_interval_minutes must be 0 (clear override) or between 15 and 10080 (1 week)")
+        return v
 
     @field_validator("note")
     @classmethod
@@ -281,6 +290,7 @@ class FeedResponse(BaseModel):
     pinned: bool = False
     auto_full_content: bool = True
     suppress_duplicates: bool = False
+    refresh_interval_minutes: int | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 

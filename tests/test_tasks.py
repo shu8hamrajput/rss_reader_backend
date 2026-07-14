@@ -12,6 +12,7 @@ from app.tasks import (
     _condition_matches,
     _estimate_read_time,
     _fire_webhooks_sync,
+    _is_due_for_refresh,
     _jaccard,
     _match_alerts,
     _tag_list,
@@ -91,6 +92,28 @@ def test_update_feed_velocity_first_and_subsequent_calls(db_session, user):
 
     _update_feed_velocity(db_session, feed, 2)
     assert feed.articles_per_day_avg == 8.0
+
+
+def test_is_due_for_refresh_no_override_always_due(db_session, user):
+    feed = make_feed(db_session, user, refresh_interval_minutes=None, last_fetched_at=datetime.now(timezone.utc))
+    assert _is_due_for_refresh(feed, datetime.now(timezone.utc)) is True
+
+
+def test_is_due_for_refresh_never_fetched_is_due(db_session, user):
+    feed = make_feed(db_session, user, refresh_interval_minutes=120, last_fetched_at=None)
+    assert _is_due_for_refresh(feed, datetime.now(timezone.utc)) is True
+
+
+def test_is_due_for_refresh_before_interval_elapsed_not_due(db_session, user):
+    now = datetime.now(timezone.utc)
+    feed = make_feed(db_session, user, refresh_interval_minutes=120, last_fetched_at=now - timedelta(minutes=30))
+    assert _is_due_for_refresh(feed, now) is False
+
+
+def test_is_due_for_refresh_after_interval_elapsed_is_due(db_session, user):
+    now = datetime.now(timezone.utc)
+    feed = make_feed(db_session, user, refresh_interval_minutes=120, last_fetched_at=now - timedelta(minutes=121))
+    assert _is_due_for_refresh(feed, now) is True
 
 
 def test_tag_list(db_session, user):
