@@ -110,6 +110,8 @@ class Feed(Base):
     default_open_action: Mapped[str] = mapped_column(String(16), default="reader", nullable=False, server_default="'reader'")
     # User-set priority: "must_read" | "casual" | "archive_only" — drives sort order and badge emphasis
     importance_tier: Mapped[str] = mapped_column(String(16), default="casual", nullable=False, server_default="'casual'")
+    # Excludes this feed from the scheduled Celery beat refresh — only fetched via manual "Refresh now"
+    manual_refresh_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

@@ -232,6 +232,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS default_open_action VARCHAR(16) NOT NULL DEFAULT 'reader'",
             # Per-feed importance tier — drives sort order and badge emphasis
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
+            # Excludes a feed from the scheduled Celery beat refresh — manual-only fetch
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS manual_refresh_only BOOLEAN NOT NULL DEFAULT FALSE",
         ]
         for stmt in stmts:
             try:
