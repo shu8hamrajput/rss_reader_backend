@@ -236,6 +236,24 @@ def test_apply_feed_meta_does_not_overwrite_existing_plugin_name(db_session, use
     assert feed.plugin_name == "youtube"
 
 
+def test_apply_feed_meta_respects_icon_locked(db_session, user):
+    feed = make_feed(db_session, user, icon_url="https://example.com/custom.png", icon_locked=True)
+    parsed = ParsedFeed(icon_url="https://example.com/source-favicon.png")
+
+    _apply_feed_meta(feed, parsed, "default")
+
+    assert feed.icon_url == "https://example.com/custom.png"
+
+
+def test_apply_feed_meta_updates_icon_when_not_locked(db_session, user):
+    feed = make_feed(db_session, user, icon_url="https://example.com/old.png")
+    parsed = ParsedFeed(icon_url="https://example.com/new-favicon.png")
+
+    _apply_feed_meta(feed, parsed, "default")
+
+    assert feed.icon_url == "https://example.com/new-favicon.png"
+
+
 # ── _parse_date / _get_content / _get_thumbnail (DefaultPlugin helpers) ───────
 
 def test_parse_date_with_published_parsed():

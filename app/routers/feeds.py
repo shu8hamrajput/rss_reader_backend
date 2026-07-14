@@ -263,6 +263,11 @@ def update_feed(
         feed.importance_tier = payload.importance_tier
     if payload.manual_refresh_only is not None:
         feed.manual_refresh_only = payload.manual_refresh_only
+    if payload.color is not None:
+        feed.color = payload.color or None
+    if payload.icon_url is not None:
+        feed.icon_url = payload.icon_url
+        feed.icon_locked = True
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

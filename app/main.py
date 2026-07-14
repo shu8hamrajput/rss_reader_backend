@@ -234,6 +234,9 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS importance_tier VARCHAR(16) NOT NULL DEFAULT 'casual'",
             # Excludes a feed from the scheduled Celery beat refresh — manual-only fetch
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS manual_refresh_only BOOLEAN NOT NULL DEFAULT FALSE",
+            # User-chosen accent color and custom-icon lock flag
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS color VARCHAR(7)",
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS icon_locked BOOLEAN NOT NULL DEFAULT FALSE",
         ]
         for stmt in stmts:
             try:

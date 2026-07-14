@@ -112,6 +112,11 @@ class Feed(Base):
     importance_tier: Mapped[str] = mapped_column(String(16), default="casual", nullable=False, server_default="'casual'")
     # Excludes this feed from the scheduled Celery beat refresh — only fetched via manual "Refresh now"
     manual_refresh_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+    # User-chosen accent color for sidebar/list grouping, hex like "#3b82f6"
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    # Once true, _apply_feed_meta stops overwriting icon_url from the source feed —
+    # set automatically when the user provides a custom icon_url via PATCH
+    icon_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

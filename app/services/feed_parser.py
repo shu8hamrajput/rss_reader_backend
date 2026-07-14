@@ -38,7 +38,7 @@ def _apply_feed_meta(feed: Feed, parsed: ParsedFeed, plugin_name: str) -> None:
         feed.description = parsed.description
     if parsed.site_url:
         feed.site_url = parsed.site_url
-    if parsed.icon_url:
+    if parsed.icon_url and not feed.icon_locked:
         feed.icon_url = parsed.icon_url
     if not feed.plugin_name:
         feed.plugin_name = plugin_name

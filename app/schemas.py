@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from pydantic import BaseModel, computed_field, field_validator, model_validator, ConfigDict
@@ -213,6 +214,8 @@ class FeedUpdate(BaseModel):
     default_open_action: str | None = None
     importance_tier: str | None = None
     manual_refresh_only: bool | None = None
+    color: str | None = None
+    icon_url: str | None = None
 
     @field_validator("default_open_action")
     @classmethod
@@ -226,6 +229,13 @@ class FeedUpdate(BaseModel):
     def valid_importance_tier(cls, v: str | None) -> str | None:
         if v is not None and v not in VALID_IMPORTANCE_TIERS:
             raise ValueError(f"importance_tier must be one of {sorted(VALID_IMPORTANCE_TIERS)}")
+        return v
+
+    @field_validator("color")
+    @classmethod
+    def valid_color(cls, v: str | None) -> str | None:
+        if v and not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
+            raise ValueError("color must be a 6-digit hex code like #3b82f6")
         return v
 
 
@@ -255,6 +265,7 @@ class FeedResponse(BaseModel):
     default_open_action: str = "reader"
     importance_tier: str = "casual"
     manual_refresh_only: bool = False
+    color: str | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
