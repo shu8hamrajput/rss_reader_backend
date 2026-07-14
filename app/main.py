@@ -241,6 +241,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS icon_locked BOOLEAN NOT NULL DEFAULT FALSE",
             # Pinned feeds surface above category ordering regardless of folder
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
+            # Per-feed override of ingest-time full-content fetching
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS auto_full_content BOOLEAN NOT NULL DEFAULT TRUE",
         ]
         for stmt in stmts:
             try:

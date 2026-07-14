@@ -340,3 +340,12 @@ def test_suggest_unsubscribe_false_for_feed_with_no_articles(client, db_session,
     resp = client.get(f"/api/v1/feeds/{feed.id}", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["suggest_unsubscribe"] is False
+
+
+def test_update_feed_auto_full_content(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.auto_full_content is True
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"auto_full_content": False}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["auto_full_content"] is False

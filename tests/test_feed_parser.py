@@ -203,6 +203,43 @@ def test_write_articles_auto_mark_read_marks_new_articles_read(db_session, user)
     assert article.read_at is not None
 
 
+def test_write_articles_withholds_full_content_when_auto_full_content_disabled(db_session, user):
+    feed = make_feed(db_session, user, auto_full_content=False)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Article", full_content="<p>scraped</p>")])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.full_content is None
+
+
+def test_write_articles_keeps_full_content_when_auto_full_content_enabled(db_session, user):
+    feed = make_feed(db_session, user, auto_full_content=True)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="Article", full_content="<p>scraped</p>")])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
+    assert article.full_content == "<p>scraped</p>"
+
+
+def test_write_articles_keeps_transcript_even_when_auto_full_content_disabled(db_session, user):
+    feed = make_feed(db_session, user, auto_full_content=False)
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="g1", title="Episode", media_type="audio/mpeg", full_content="transcript text"),
+        ParsedArticle(guid="g2", title="Video", media_type="video/youtube", full_content="video transcript"),
+    ])
+
+    _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    articles = {a.guid: a for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert articles["g1"].full_content == "transcript text"
+    assert articles["g2"].full_content == "video transcript"
+
+
 # ── _apply_feed_meta ─────────────────────────────────────────────────────────
 
 def test_apply_feed_meta_sets_title_only_when_absent(db_session, user):
