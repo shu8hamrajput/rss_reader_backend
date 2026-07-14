@@ -283,6 +283,8 @@ def update_feed(
         feed.retention_days = payload.retention_days or None
     if payload.max_articles_retained is not None:
         feed.max_articles_retained = payload.max_articles_retained or None
+    if payload.webhook_eligible is not None:
+        feed.webhook_eligible = payload.webhook_eligible
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

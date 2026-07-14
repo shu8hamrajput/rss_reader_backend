@@ -83,6 +83,10 @@ async def _fire_for_user(user_id: int, event: str, payload: dict) -> None:
 
 @event_bus.on("article.created")
 async def on_article_created(payload: dict) -> None:
+    # webhook_eligible=False opts a specific feed out of instant webhook push —
+    # SSE live-notification and alert matching (separate event-bus consumers) are unaffected.
+    if not payload.get("webhook_eligible", True):
+        return
     await _fire_for_user(payload["user_id"], "new_article", payload)
 
 
