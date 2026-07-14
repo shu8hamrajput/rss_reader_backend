@@ -126,6 +126,10 @@ class Feed(Base):
     # it via refetch/save-later — for feeds where the fetched HTML isn't wanted
     # by default (e.g. paywalled sites, or to save fetch-quota headroom).
     auto_full_content: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default='true')
+    # When True, new articles whose (normalized) title already exists among this
+    # user's other feeds are skipped on ingest — for aggregators/syndicators that
+    # repost content the user already follows at its original source.
+    suppress_duplicates: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

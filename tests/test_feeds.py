@@ -349,3 +349,12 @@ def test_update_feed_auto_full_content(client, db_session, user, auth_headers):
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"auto_full_content": False}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["auto_full_content"] is False
+
+
+def test_update_feed_suppress_duplicates(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.suppress_duplicates is False
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"suppress_duplicates": True}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["suppress_duplicates"] is True

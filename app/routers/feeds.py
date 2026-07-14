@@ -275,6 +275,8 @@ def update_feed(
         feed.pinned = payload.pinned
     if payload.auto_full_content is not None:
         feed.auto_full_content = payload.auto_full_content
+    if payload.suppress_duplicates is not None:
+        feed.suppress_duplicates = payload.suppress_duplicates
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
