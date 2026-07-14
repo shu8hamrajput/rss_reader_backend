@@ -1,7 +1,10 @@
 import hmac
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -87,18 +90,34 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-# ── OAuth state (CSRF protection) ─────────────────────────────────────────────
+# ── OAuth state (CSRF protection + optional frontend-origin embedding) ──────────
+#
+# Format: "{nonce}|{frontend_origin}.{hmac_sig}"
+# The frontend_origin is embedded so the callback can redirect back to wherever
+# the user started the flow (supports multiple Vercel deployments / localhost).
 
-def generate_oauth_state() -> str:
-    token = secrets.token_urlsafe(24)
-    sig = hmac.new(settings.jwt_secret_key.encode(), token.encode(), hashlib.sha256).hexdigest()
-    return f"{token}.{sig}"
+def generate_oauth_state(frontend_origin: str = "") -> str:
+    nonce = secrets.token_urlsafe(24)
+    payload = f"{nonce}|{frontend_origin}"
+    sig = hmac.new(settings.jwt_secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
 
 
 def verify_oauth_state(state: str) -> bool:
     try:
-        token, sig = state.rsplit(".", 1)
-        expected = hmac.new(settings.jwt_secret_key.encode(), token.encode(), hashlib.sha256).hexdigest()
+        payload, sig = state.rsplit(".", 1)
+        expected = hmac.new(settings.jwt_secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(sig, expected)
-    except Exception:
+    except Exception as exc:
+        logger.debug("OAuth state verification failed: %s", exc)
         return False
+
+
+def extract_frontend_origin_from_state(state: str) -> str | None:
+    """Return the frontend origin embedded in the state, or None if not present."""
+    try:
+        payload, _ = state.rsplit(".", 1)
+        _, origin = payload.split("|", 1)
+        return origin if origin else None
+    except Exception:
+        return None

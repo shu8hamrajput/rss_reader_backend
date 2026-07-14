@@ -1,101 +1,97 @@
 """
-OPML import and export.
+OPML import/export router — pure dispatcher. See ADR-004.
 
-Import: POST /opml/import   (multipart file upload or raw XML body)
-Export: GET  /opml/export   (returns application/xml)
+All format-specific logic lives in app/formats/:
+  OPMLImporter      → parses .opml / .xml files
+  YouTubeCSVImporter→ parses Google Takeout subscriptions.csv
+  OPMLExporter      → serialises feeds as OPML XML
+  MarkdownExporter  → serialises feeds as Markdown
+
+To add a new import format (Pocket, Instapaper, etc.):
+  1. Create app/formats/pocket.py implementing FeedImporter
+  2. format_registry.register_importer(PocketImporter())
+  3. Done — this router auto-detects it by file extension / MIME type.
 """
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+import logging
 from typing import Annotated
 
-import defusedxml.ElementTree as DefusedET
-from defusedxml.common import DefusedXmlException
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
+from ..formats import format_registry
 from ..models import Category, Feed, User
 from ..schemas import OPMLImportResult
 from ..services.feed_parser import refresh_feed
+from ..services.plans import effective_plan, limits_for
 
 router = APIRouter(prefix="/opml", tags=["OPML"])
+logger = logging.getLogger(__name__)
 
-_MAX_OPML_SIZE = 5 * 1024 * 1024  # 5 MB
-
-
-# ── Import ────────────────────────────────────────────────────────────────────
-
-def _iter_outlines(element: ET.Element, folder: str | None = None):
-    """Yield (xml_url, title, folder) tuples from nested OPML outlines."""
-    for outline in element.findall("outline"):
-        xml_url = outline.get("xmlUrl") or outline.get("xmlurl")
-        title = outline.get("title") or outline.get("text")
-        feed_type = (outline.get("type") or "").lower()
-
-        if xml_url and feed_type in ("rss", "atom", ""):
-            yield xml_url.strip(), title, folder
-        else:
-            # Treat as a folder — recurse
-            folder_name = title or outline.get("text")
-            yield from _iter_outlines(outline, folder_name)
+_MAX_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
-@router.post(
-    "/import",
-    response_model=OPMLImportResult,
-    summary="Import feeds from an OPML file",
-    description=(
-        "Upload an OPML file to bulk-subscribe to feeds. "
-        "Folders in the OPML become categories. "
-        "Already-subscribed feeds are skipped."
-    ),
-)
-async def import_opml(
-    file: Annotated[UploadFile, File(description="OPML file (.opml or .xml)")],
+@router.get("/formats", summary="List available import/export formats")
+def list_formats():
+    return {
+        "importers": format_registry.list_importers(),
+        "exporters": format_registry.list_exporters(),
+    }
+
+
+@router.post("/import", response_model=OPMLImportResult, summary="Import feeds from a file")
+async def import_feeds(
+    file: Annotated[UploadFile, File(description="OPML (.opml/.xml) or YouTube CSV (.csv)")],
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    raw = await file.read(_MAX_OPML_SIZE + 1)
-    if len(raw) > _MAX_OPML_SIZE:
-        raise HTTPException(status_code=413, detail="OPML file too large (max 5 MB)")
+    raw = await file.read(_MAX_SIZE + 1)
+    if len(raw) > _MAX_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 5 MB)")
+
+    filename     = file.filename or ""
+    content_type = file.content_type or ""
+    importer     = format_registry.get_importer(filename, content_type, raw)
+    if not importer:
+        supported = [ext for i in format_registry.list_importers() for ext in i["extensions"]]
+        raise HTTPException(status_code=415, detail=f"Unsupported file type. Supported: {supported}")
+
     try:
-        root = DefusedET.fromstring(raw.decode("utf-8", errors="replace"))
-    except (ET.ParseError, DefusedXmlException) as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid XML: {exc}")
+        imported_feeds = await importer.parse(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
-    body = root.find("body")
-    if body is None:
-        raise HTTPException(status_code=422, detail="OPML has no <body> element")
-
+    plan_limits   = limits_for(effective_plan(current_user))
+    current_count = db.query(func.count(Feed.id)).filter(Feed.user_id == current_user.id).scalar() or 0
+    category_cache: dict[str, Category] = {}
     added = skipped = failed = 0
     errors: list[str] = []
-    category_cache: dict[str, Category] = {}
 
-    for xml_url, title, folder_name in _iter_outlines(body):
-        # Resolve or create category
-        cat: Category | None = None
-        if folder_name:
-            if folder_name not in category_cache:
-                cat = db.query(Category).filter(
-                    Category.user_id == current_user.id, Category.name == folder_name
-                ).first()
-                if not cat:
-                    cat = Category(user_id=current_user.id, name=folder_name)
-                    db.add(cat)
-                    db.flush()
-                category_cache[folder_name] = cat
-            cat = category_cache[folder_name]
+    for imp_feed in imported_feeds:
+        if plan_limits.max_feeds is not None and current_count + added >= plan_limits.max_feeds:
+            errors.append("Plan feed limit reached — remaining feeds skipped")
+            break
 
-        # Check for existing subscription
-        existing = db.query(Feed).filter(
-            Feed.url == xml_url, Feed.user_id == current_user.id
-        ).first()
-        if existing:
+        if db.query(Feed).filter(Feed.url == imp_feed.url, Feed.user_id == current_user.id).first():
             skipped += 1
             continue
 
-        feed = Feed(url=xml_url, title=title, user_id=current_user.id)
+        cat: Category | None = None
+        if imp_feed.category:
+            if imp_feed.category not in category_cache:
+                cat = db.query(Category).filter(
+                    Category.user_id == current_user.id, Category.name == imp_feed.category
+                ).first()
+                if not cat:
+                    cat = Category(user_id=current_user.id, name=imp_feed.category)
+                    db.add(cat)
+                    db.flush()
+                category_cache[imp_feed.category] = cat
+            cat = category_cache[imp_feed.category]
+
+        feed = Feed(url=imp_feed.url, title=imp_feed.title, user_id=current_user.id)
         if cat:
             feed.categories.append(cat)
         db.add(feed)
@@ -105,73 +101,49 @@ async def import_opml(
             await refresh_feed(feed, db)
             added += 1
         except Exception as exc:
-            errors.append(f"{xml_url}: {exc}")
+            errors.append(f"{imp_feed.url}: {exc}")
             failed += 1
 
     db.commit()
     return OPMLImportResult(added=added, skipped=skipped, failed=failed, errors=errors)
 
 
-# ── Export ────────────────────────────────────────────────────────────────────
-
-@router.get(
-    "/export",
-    summary="Export your feeds as an OPML file",
-    description="Downloads all your subscribed feeds as a standard OPML 1.0 file, grouped by category.",
-    response_class=Response,
-)
-def export_opml(
+@router.get("/export", summary="Export your feeds", response_class=Response)
+async def export_feeds(
+    format: str = Query("opml", description="Export format: opml, markdown"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    feeds = db.query(Feed).filter(Feed.user_id == current_user.id).all()
-    categories = db.query(Category).filter(Category.user_id == current_user.id).all()
-
-    root = ET.Element("opml", version="1.0")
-    head = ET.SubElement(root, "head")
-    ET.SubElement(head, "title").text = f"{current_user.name or current_user.email}'s feeds"
-    ET.SubElement(head, "dateCreated").text = datetime.now(timezone.utc).strftime(
-        "%a, %d %b %Y %H:%M:%S +0000"
-    )
-    body = ET.SubElement(root, "body")
-
-    # Categorised feeds
-    categorised_feed_ids: set[int] = set()
-    for cat in categories:
-        if not cat.feeds:
-            continue
-        folder = ET.SubElement(body, "outline", text=cat.name, title=cat.name)
-        for feed in cat.feeds:
-            ET.SubElement(
-                folder,
-                "outline",
-                type="rss",
-                text=feed.title or feed.url,
-                title=feed.title or feed.url,
-                xmlUrl=feed.url,
-                **{"htmlUrl": feed.site_url} if feed.site_url else {},
-            )
-            categorised_feed_ids.add(feed.id)
-
-    # Uncategorised feeds
-    for feed in feeds:
-        if feed.id in categorised_feed_ids:
-            continue
-        ET.SubElement(
-            body,
-            "outline",
-            type="rss",
-            text=feed.title or feed.url,
-            title=feed.title or feed.url,
-            xmlUrl=feed.url,
-            **{"htmlUrl": feed.site_url} if feed.site_url else {},
+    exporter = format_registry.get_exporter(format)
+    if not exporter:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown format {format!r}. Available: {[e['name'] for e in format_registry.list_exporters()]}",
         )
 
-    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
-    xml_bytes = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
-
-    return Response(
-        content=xml_bytes,
-        media_type="application/xml",
-        headers={"Content-Disposition": "attachment; filename=feeds.opml"},
+    feeds = (
+        db.query(Feed)
+        .filter(Feed.user_id == current_user.id)
+        .options(selectinload(Feed.categories))
+        .limit(10_000)
+        .all()
     )
+
+    content  = await exporter.export(feeds, current_user)
+    filename = f"feeds{exporter.extension}"
+    return Response(
+        content=content,
+        media_type=exporter.content_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# Backward-compat alias — YouTube CSV was previously a separate endpoint
+@router.post("/import-youtube", response_model=OPMLImportResult,
+             summary="Import YouTube subscriptions CSV (alias for /import)")
+async def import_youtube_csv(
+    file: Annotated[UploadFile, File()],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await import_feeds(file, db, current_user)

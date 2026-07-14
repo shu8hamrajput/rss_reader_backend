@@ -22,9 +22,19 @@ from .celery_app import celery_app
 from .config import settings
 from .database import SessionLocal
 from .models import AlertMatch, Article, ArticleRule, Feed, GeneratedCandidate, SearchAlert, UserWebhook
+from .bus import event_bus as _event_bus
 from .services.events import publish
 from .services.feed_parser import refresh_url_for_all_subscribers
 from .services.fetchers._common import strip_and_select
+
+
+def _emit(event: str, payload: dict) -> None:
+    """Emit a bus event from a sync Celery task context.
+
+    asyncio.run() is safe here: the prior asyncio.run() for feed fetching has
+    already returned, so there is no running event loop in this thread.
+    """
+    asyncio.run(_event_bus.emit(event, payload))
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +66,7 @@ def _cluster_stories(db, articles: list[Article]) -> None:
     nearby_rows = db.query(Article.id, Article.title, Article.story_cluster_id).filter(
         Article.published_at >= since,
         Article.id.notin_([a.id for a in articles]),
-    ).all()
+    ).limit(5000).all()
 
     # Build lookup: {id: (title_tokens, cluster_id)}
     existing: list[tuple[int, set[str], str | None]] = [
@@ -68,9 +78,11 @@ def _cluster_stories(db, articles: list[Article]) -> None:
         tokens = _tokenize(article.title or "")
         best_cluster: str | None = None
         best_score = 0.39  # threshold
+        scores: list[float] = []
 
         for _, etokens, ecluster in existing:
             score = _jaccard(tokens, etokens)
+            scores.append(score)
             if score > best_score:
                 best_score = score
                 if ecluster:
@@ -89,16 +101,16 @@ def _cluster_stories(db, articles: list[Article]) -> None:
             # previously only the in-memory list was updated, leaving those rows
             # with story_cluster_id=NULL in the DB.
             newly_clustered_ids = [
-                eid for eid, etokens, ecluster in existing
-                if not ecluster and _jaccard(tokens, etokens) > 0.39
+                eid for i, (eid, _, ecluster) in enumerate(existing)
+                if not ecluster and scores[i] > 0.39
             ]
             if newly_clustered_ids:
                 db.query(Article).filter(Article.id.in_(newly_clustered_ids)).update(
                     {"story_cluster_id": best_cluster}, synchronize_session=False
                 )
             existing = [
-                (eid, etokens, best_cluster if _jaccard(tokens, etokens) > 0.39 and not ecluster else ecluster)
-                for eid, etokens, ecluster in existing
+                (eid, etokens, best_cluster if scores[i] > 0.39 and not ecluster else ecluster)
+                for i, (eid, etokens, ecluster) in enumerate(existing)
             ]
         else:
             article.story_cluster_id = None
@@ -220,7 +232,7 @@ def _apply_rules(db, user_id: int, articles: list[Article], cached_rules: list |
                 rule.match_count = (rule.match_count or 0) + 1
 
 
-def _match_alerts(db, feed_id: int, user_id: int, since: datetime, cached_alerts: list | None = None) -> None:
+def _match_alerts(db, feed_id: int, user_id: int, since: datetime, cached_alerts: list | None = None, cached_webhooks: list | None = None) -> None:
     """Check newly ingested articles against the user's search alerts and publish matches."""
     alerts = cached_alerts if cached_alerts is not None else db.query(SearchAlert).filter(SearchAlert.user_id == user_id).all()
     if not alerts:
@@ -261,14 +273,14 @@ def _match_alerts(db, feed_id: int, user_id: int, since: datetime, cached_alerts
                     "query": alert.query,
                     "count": count,
                     "feed_id": feed_id,
-                })
+                }, cached_webhooks=cached_webhooks)
         except Exception as exc:
             logger.warning("Alert match failed for alert %d: %s", alert.id, exc)
 
 
-def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict) -> None:
+def _fire_webhooks_sync(db, user_id: int, event: str, payload: dict, cached_webhooks: list | None = None) -> None:
     """Deliver event payload to all active webhooks subscribed to this event type."""
-    webhooks = db.query(UserWebhook).filter(
+    webhooks = cached_webhooks if cached_webhooks is not None else db.query(UserWebhook).filter(
         UserWebhook.user_id == user_id,
         UserWebhook.is_active == True,
     ).all()
@@ -311,8 +323,8 @@ def refresh_all_feeds() -> None:
             len(url_groups), len(feeds),
         )
 
-        # Pre-fetch rules and alerts per user to avoid repeated identical queries
-        # when multiple feeds of the same user refresh in the same beat cycle.
+        # Pre-fetch rules, alerts, and webhooks per user to avoid repeated identical
+        # queries when multiple feeds of the same user refresh in the same beat cycle.
         user_ids = {feed.user_id for feed in feeds}
         rules_by_user: dict[int, list] = {
             uid: db.query(ArticleRule)
@@ -323,6 +335,10 @@ def refresh_all_feeds() -> None:
         }
         alerts_by_user: dict[int, list] = {
             uid: db.query(SearchAlert).filter(SearchAlert.user_id == uid).all()
+            for uid in user_ids
+        }
+        webhooks_by_user: dict[int, list] = {
+            uid: db.query(UserWebhook).filter(UserWebhook.user_id == uid, UserWebhook.is_active == True).all()
             for uid in user_ids
         }
 
@@ -348,10 +364,11 @@ def refresh_all_feeds() -> None:
                             feed.user_id,
                             {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                         )
-                        _match_alerts(db, feed.id, feed.user_id, before_refresh, alerts_by_user.get(feed.user_id))
-                        _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                        _match_alerts(db, feed.id, feed.user_id, before_refresh, alerts_by_user.get(feed.user_id), webhooks_by_user.get(feed.user_id))
+                        _emit("article.created", {
+                            "user_id": feed.user_id,
                             "feed_id": feed.id,
-                            "count": new_count,
+                            "count":   new_count,
                         })
                 db.commit()
             except Exception as exc:
@@ -394,9 +411,10 @@ def refresh_feed_by_id(feed_id: int) -> int:
                     {"type": "new_articles", "feed_id": feed.id, "count": new_count},
                 )
                 _match_alerts(db, feed.id, feed.user_id, before_refresh)
-                _fire_webhooks_sync(db, feed.user_id, "new_article", {
+                _emit("article.created", {
+                    "user_id": feed.user_id,
                     "feed_id": feed.id,
-                    "count": new_count,
+                    "count":   new_count,
                 })
                 db.commit()
             return new_count

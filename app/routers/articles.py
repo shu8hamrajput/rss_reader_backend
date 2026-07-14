@@ -82,20 +82,18 @@ def _fts_ids(search: str, db: Session) -> list[int] | None:
         return None  # search_vector not yet populated — fall back to ILIKE
 
 
-@router.get("", response_model=ArticleListResponse, summary="List articles with filtering and pagination")
-def list_articles(
-    feed_id: int | None = Query(None, description="Filter by feed ID"),
-    category_id: int | None = Query(None, description="Filter by category ID"),
-    is_read: bool | None = Query(None, description="Filter by read status"),
-    is_bookmarked: bool | None = Query(None, description="Filter by bookmark status"),
-    tag: str | None = Query(None, description="Filter by tag (e.g. read_later, saved_later)"),
-    has_audio: bool | None = Query(None, description="Filter to audio/podcast episodes only"),
-    in_progress: bool | None = Query(None, description="Filter to episodes with a saved resume position"),
-    search: str | None = Query(None, description="Full-text search (title + summary + content)"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+def _build_article_query(
+    db: Session,
+    current_user: User,
+    *,
+    feed_id: int | None = None,
+    category_id: int | None = None,
+    is_read: bool | None = None,
+    is_bookmarked: bool | None = None,
+    tag: str | None = None,
+    has_audio: bool | None = None,
+    in_progress: bool | None = None,
+    search: str | None = None,
 ):
     q = db.query(Article).join(Feed).filter(Feed.user_id == current_user.id)
 
@@ -115,7 +113,6 @@ def list_articles(
         q = q.filter(Article.is_bookmarked == is_bookmarked)
 
     if tag is not None:
-        # JSON array contains the tag — simple LIKE match keeps this portable across SQLite/Postgres
         q = q.filter(Article.tags.like(f'%"{tag}"%'))
 
     if has_audio:
@@ -128,12 +125,16 @@ def list_articles(
         fts_article_ids = _fts_ids(search, db)
         if fts_article_ids is not None:
             if not fts_article_ids:
-                return ArticleListResponse(total=0, page=page, page_size=page_size, items=[])
+                return None
             q = q.filter(Article.id.in_(fts_article_ids))
         else:
             term = f"%{search}%"
             q = q.filter(or_(Article.title.ilike(term), Article.summary.ilike(term)))
 
+    return q
+
+
+def _build_article_list_response(q, page: int, page_size: int) -> ArticleListResponse:
     # Use a window function to get the total count and the page rows in ONE query
     # instead of two separate round-trips (q.count() + q.all()).
     # full_content / search_vector are deferred: full_content is MB of fetched HTML
@@ -164,9 +165,77 @@ def list_articles(
         set_committed_value(row.Article, 'full_content', None)
         items.append(ArticleResponse.model_validate(row.Article))
 
-    return ArticleListResponse(
-        total=total, page=page, page_size=page_size, items=items,
+    return ArticleListResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.get("", response_model=ArticleListResponse, summary="List articles with filtering and pagination")
+def list_articles(
+    feed_id: int | None = Query(None, description="Filter by feed ID"),
+    category_id: int | None = Query(None, description="Filter by category ID"),
+    is_read: bool | None = Query(None, description="Filter by read status"),
+    is_bookmarked: bool | None = Query(None, description="Filter by bookmark status"),
+    tag: str | None = Query(None, description="Filter by tag (e.g. read_later, saved_later)"),
+    has_audio: bool | None = Query(None, description="Filter to audio/podcast episodes only"),
+    in_progress: bool | None = Query(None, description="Filter to episodes with a saved resume position"),
+    search: str | None = Query(None, description="Full-text search (title + summary + content)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = _build_article_query(
+        db,
+        current_user,
+        feed_id=feed_id,
+        category_id=category_id,
+        is_read=is_read,
+        is_bookmarked=is_bookmarked,
+        tag=tag,
+        has_audio=has_audio,
+        in_progress=in_progress,
+        search=search,
     )
+    if q is None:
+        return ArticleListResponse(total=0, page=page, page_size=page_size, items=[])
+
+    return _build_article_list_response(q, page, page_size)
+
+
+@router.get("/smart/top-stories", response_model=ArticleListResponse, summary="List unread top stories")
+def smart_top_stories(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+    q = _build_article_query(db, current_user, is_read=False)
+    q = q.filter(or_(Article.published_at >= cutoff, Article.published_at.is_(None)))
+    return _build_article_list_response(q, page, page_size)
+
+
+@router.get("/smart/recently-published", response_model=ArticleListResponse, summary="List recently published articles")
+def smart_recently_published(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    q = _build_article_query(db, current_user)
+    q = q.filter(or_(Article.published_at >= cutoff, Article.published_at.is_(None)))
+    return _build_article_list_response(q, page, page_size)
+
+
+@router.get("/smart/most-bookmarked", response_model=ArticleListResponse, summary="List most bookmarked articles")
+def smart_most_bookmarked(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = _build_article_query(db, current_user, is_bookmarked=True)
+    return _build_article_list_response(q, page, page_size)
 
 
 @router.get("/stats", response_model=ReadingStatsResponse, summary="Reading activity statistics")
@@ -281,7 +350,7 @@ def get_reading_stats(
 
 
 # System-managed tags that users should not overwrite via the tags endpoint
-_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "read", "unread"})
+_SYSTEM_TAGS = frozenset({"saved_later", "read_later", "listen_later", "read", "unread"})
 
 
 @router.get("/user-tags", response_model=UserTagsResponse, summary="List all distinct user tags")

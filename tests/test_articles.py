@@ -71,6 +71,33 @@ def test_list_articles_has_audio_filter(client, db_session, user, auth_headers):
     assert ids == {audio.id, youtube.id}
 
 
+def test_smart_views_return_server_filtered_articles(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    deep_dive = make_article(db_session, feed, title="Deep dive", content="A long article with a highlight", is_read=False, is_bookmarked=False)
+    quick_read = make_article(db_session, feed, title="Quick read", content="Short article", is_read=False, is_bookmarked=False)
+    bookmarked = make_article(db_session, feed, title="Bookmarked", content="Bookmarked article", is_read=True, is_bookmarked=True)
+
+    resp = client.get("/api/v1/articles/smart/top-stories", headers=auth_headers)
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert deep_dive.id in ids
+    assert quick_read.id not in ids
+    assert bookmarked.id not in ids
+
+    resp = client.get("/api/v1/articles/smart/recently-published", headers=auth_headers)
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert deep_dive.id in ids
+    assert quick_read.id in ids
+    assert bookmarked.id not in ids
+
+    resp = client.get("/api/v1/articles/smart/most-bookmarked", headers=auth_headers)
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert bookmarked.id in ids
+
+
 def test_list_articles_search(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
     target = make_article(db_session, feed, title="Quokka population rebounds in Western Australia")

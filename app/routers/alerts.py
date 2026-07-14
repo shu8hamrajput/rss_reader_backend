@@ -14,7 +14,13 @@ def list_alerts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return db.query(SearchAlert).filter(SearchAlert.user_id == current_user.id).order_by(SearchAlert.created_at).all()
+    return (
+        db.query(SearchAlert)
+        .filter(SearchAlert.user_id == current_user.id)
+        .order_by(SearchAlert.created_at)
+        .limit(200)
+        .all()
+    )
 
 
 @router.post("", response_model=SearchAlertResponse, status_code=status.HTTP_201_CREATED, summary="Create a search alert")

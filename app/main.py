@@ -1,4 +1,5 @@
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -24,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    _migrate()
+    try:
+        Base.metadata.create_all(bind=engine)
+        _migrate()
+    except Exception:
+        logger.exception("Database schema initialization failed during startup; continuing without migrations")
     yield
 
 
@@ -219,6 +223,9 @@ def _migrate() -> None:
             # Indexes for podcast and in-progress filters
             "CREATE INDEX IF NOT EXISTS ix_articles_media_type ON articles (media_type) WHERE media_type IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS ix_articles_resume_at_seconds ON articles (resume_at_seconds) WHERE resume_at_seconds IS NOT NULL",
+            # Plugin system — track which plugin handles each feed
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS plugin_name VARCHAR(64)",
+            "CREATE INDEX IF NOT EXISTS ix_feeds_plugin_name ON feeds (plugin_name) WHERE plugin_name IS NOT NULL",
         ]
         for stmt in stmts:
             try:
@@ -262,9 +269,17 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_STATIC_ORIGINS = {o.strip() for o in settings.cors_origins.split(",") if o.strip()}
+# Allow any Vercel deployment URL (preview + production) and localhost variants
+_VERCEL_RE = re.compile(r'^https://[a-zA-Z0-9\-]+\.vercel\.app$')
+
+def _is_allowed_origin(origin: str) -> bool:
+    return origin in _STATIC_ORIGINS or bool(_VERCEL_RE.match(origin))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_origins=list(_STATIC_ORIGINS),
+    allow_origin_regex=r'^https://[a-zA-Z0-9\-]+\.vercel\.app$',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

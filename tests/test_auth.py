@@ -1,8 +1,10 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.auth import create_access_token
 from app.config import settings
+from app.main import app, lifespan
 from app.models import User, UserSession
 
 from .conftest import auth_headers_for
@@ -130,6 +132,20 @@ def test_list_and_delete_sessions(client, db_session, user, other_user, auth_hea
 
     resp = client.delete(f"/api/v1/auth/sessions/{newer.id}", headers=auth_headers)
     assert resp.status_code == 204
+
+
+def test_lifespan_survives_schema_initialization_errors(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("app.main.Base.metadata.create_all", boom)
+    monkeypatch.setattr("app.main._migrate", boom)
+
+    async def run_lifespan():
+        async with lifespan(app):
+            pass
+
+    asyncio.run(run_lifespan())
 
 
 def test_google_token_exchange_not_configured(client, monkeypatch):

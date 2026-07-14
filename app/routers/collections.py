@@ -43,7 +43,7 @@ def _normalize_url(url: str) -> str:
 
 
 def _get_subscribed_collection_ids(user_id: int, db: Session) -> set[int]:
-    rows = db.query(CollectionSubscription.collection_id).filter(CollectionSubscription.user_id == user_id).all()
+    rows = db.query(CollectionSubscription.collection_id).filter(CollectionSubscription.user_id == user_id).limit(10_000).all()
     return {r.collection_id for r in rows}
 
 
@@ -313,7 +313,9 @@ def subscribe_collection(
         feeds_added += 1
 
     db.add(CollectionSubscription(collection_id=collection.id, user_id=current_user.id))
-    collection.subscriber_count += 1
+    db.query(Collection).filter(Collection.id == collection.id).update(
+        {"subscriber_count": Collection.subscriber_count + 1}
+    )
     db.commit()
     return CollectionSubscribeResult(subscribed=True, feeds_added=feeds_added)
 
@@ -334,6 +336,8 @@ def unsubscribe_collection(
 
     collection = db.query(Collection).filter(Collection.id == collection_id).first()
     db.delete(sub)
-    if collection and collection.subscriber_count > 0:
-        collection.subscriber_count -= 1
+    if collection:
+        db.query(Collection).filter(
+            Collection.id == collection_id, Collection.subscriber_count > 0
+        ).update({"subscriber_count": Collection.subscriber_count - 1})
     db.commit()

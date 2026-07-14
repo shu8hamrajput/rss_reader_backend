@@ -11,16 +11,47 @@ Two flows are supported:
 After either flow the client receives a TokenResponse with a Bearer JWT.
 Every subsequent request must include:  Authorization: Bearer <token>
 """
+import secrets
+import time
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from ..auth import create_access_token, generate_oauth_state, get_current_user, verify_oauth_state
+from ..auth import create_access_token, generate_oauth_state, get_current_user, verify_oauth_state, extract_frontend_origin_from_state
+from ..auth_providers import provider_registry
 from ..config import settings
+
+# ── One-time exchange code store ─────────────────────────────────────────────
+# Maps short-lived code → JWT. Codes expire after 60s and are single-use.
+# In-process dict is fine for single-instance deployments; replace with Redis
+# for multi-instance. Codes are cryptographically random (128 bits).
+_EXCHANGE_CODE_TTL = 60  # seconds
+_exchange_codes: dict[str, tuple[str, float]] = {}  # code → (jwt, expires_at)
+
+
+def _issue_exchange_code(jwt: str) -> str:
+    code = secrets.token_urlsafe(16)
+    _exchange_codes[code] = (jwt, time.time() + _EXCHANGE_CODE_TTL)
+    # Prune expired codes opportunistically
+    now = time.time()
+    expired = [k for k, (_, exp) in _exchange_codes.items() if exp < now]
+    for k in expired:
+        del _exchange_codes[k]
+    return code
+
+
+def _consume_exchange_code(code: str) -> str:
+    entry = _exchange_codes.pop(code, None)
+    if not entry:
+        raise HTTPException(status_code=400, detail="Invalid or expired auth code")
+    jwt, expires_at = entry
+    if time.time() > expires_at:
+        raise HTTPException(status_code=400, detail="Auth code expired — please sign in again")
+    return jwt
 from ..database import get_db
 from ..models import User, UserPreferences, UserSession
 import secrets
@@ -144,12 +175,25 @@ def _require_google_config() -> None:
     response_class=RedirectResponse,
     status_code=302,
 )
-async def google_login(response: Response):
+async def google_login(request: Request, origin: str = Query("", description="Frontend origin to redirect back to after OAuth")):
     _require_google_config()
-    state = generate_oauth_state()
+    # Priority: explicit ?origin= param > Origin header > Referer header > FRONTEND_URL setting.
+    # Explicit param is most reliable — browsers omit Referer in private mode and on some mobile
+    # browsers on cross-origin navigations. The frontend passes window.location.origin explicitly.
+    def _origin_from_url(url: str) -> str:
+        p = urlparse(url)
+        return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
+
+    frontend_origin = (
+        origin.strip()
+        or request.headers.get("origin")
+        or _origin_from_url(request.headers.get("referer", ""))
+        or settings.frontend_url
+    )
+    state = generate_oauth_state(frontend_origin)
     url = _google_auth_url(settings.google_redirect_uri, state)
     redirect = RedirectResponse(url=url, status_code=302)
-    redirect.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
+    redirect.set_cookie("oauth_state", state, httponly=True, samesite="none", secure=True, max_age=600)
     return redirect
 
 
@@ -182,12 +226,158 @@ async def google_callback(
     db.commit()
     token_response = _build_token_response(user)
 
-    separator = '&' if '?' in settings.frontend_url else '?'
-    redirect_url = f"{settings.frontend_url}{separator}{urlencode({'token': token_response.access_token})}"
+    origin_from_state = extract_frontend_origin_from_state(state)
+    base_url = origin_from_state or settings.frontend_url
+
+    # Security: never put the JWT in the URL (browser history, logs, Referer headers).
+    # Issue a short-lived one-time exchange code instead; the frontend POSTs it to
+    # /auth/exchange to get the actual JWT. The code is single-use and expires in 60s.
+    exchange_code = _issue_exchange_code(token_response.access_token)
+    separator = '&' if '?' in base_url else '?'
+    redirect_url = f"{base_url}{separator}{urlencode({'code': exchange_code})}"
 
     redirect = RedirectResponse(url=redirect_url, status_code=302)
-    redirect.delete_cookie('oauth_state')
+    redirect.delete_cookie('oauth_state', samesite="none", secure=True)
     return redirect
+
+
+# ── Desktop native app helpers ───────────────────────────────────────────────
+
+# ── Exchange code endpoint (security: keeps JWT out of URLs) ────────────────
+
+@router.post("/exchange", summary="Exchange a one-time auth code for a JWT")
+async def exchange_auth_code(code: str = Query(..., description="One-time code received after OAuth redirect")):
+    """Exchange the short-lived code from the OAuth callback for a JWT.
+
+    The OAuth callback no longer puts the JWT in the redirect URL (browser history,
+    server logs, Referer headers). Instead it puts a one-time 60-second code.
+    The frontend calls this endpoint to trade it for the actual access token.
+    """
+    jwt = _consume_exchange_code(code)
+    return {"access_token": jwt, "token_type": "bearer"}
+
+
+# ── Generic auth provider routes ─────────────────────────────────────────────
+
+@router.get("/providers", summary="List available auth providers")
+def list_providers():
+    """Return metadata for all registered auth providers (e.g. google, github)."""
+    return provider_registry.list_providers()
+
+
+@router.get("/{provider}/login", response_class=RedirectResponse, status_code=302,
+            summary="Generic OAuth login redirect")
+async def provider_login(
+    provider: str,
+    request: Request,
+    origin: str = Query("", description="Frontend origin to redirect back to"),
+):
+    p = provider_registry.get(provider)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Unknown auth provider: {provider!r}")
+
+    def _origin_from_url(url: str) -> str:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+
+    frontend_origin = (
+        origin.strip()
+        or request.headers.get("origin")
+        or _origin_from_url(request.headers.get("referer", ""))
+        or settings.frontend_url
+    )
+
+    redirect_uri = str(request.url).split(f"/{provider}/login")[0] + f"/{provider}/callback"
+    state = generate_oauth_state(frontend_origin)
+    url = p.authorization_url(redirect_uri, state)
+    response = RedirectResponse(url=url, status_code=302)
+    response.set_cookie("oauth_state", state, httponly=True, samesite="none", secure=True, max_age=600)
+    return response
+
+
+@router.get("/{provider}/callback", response_class=RedirectResponse, status_code=302,
+            summary="Generic OAuth callback")
+async def provider_callback(
+    provider: str,
+    request: Request,
+    code: str = Query(...),
+    state: str = Query(...),
+    oauth_state: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+):
+    p = provider_registry.get(provider)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Unknown auth provider: {provider!r}")
+    if not oauth_state or not verify_oauth_state(oauth_state) or oauth_state != state:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state — possible CSRF attempt")
+
+    redirect_uri = str(request.url).split(f"/{provider}/callback")[0] + f"/{provider}/callback"
+    redirect_uri = redirect_uri.split("?")[0]
+
+    user_info = await p.exchange_code(code, redirect_uri)
+
+    # Upsert user by provider_id + email
+    from ..models import User
+    user = db.query(User).filter(User.google_id == user_info.provider_id).first()
+    if not user:
+        # Also try matching by email (user may have registered via a different provider)
+        user = db.query(User).filter(User.email == user_info.email).first()
+    if user:
+        user.name       = user_info.name or user.name
+        user.avatar_url = user_info.avatar_url or user.avatar_url
+        user.last_login_at = datetime.now(timezone.utc)
+    else:
+        user = User(
+            google_id  = user_info.provider_id,  # reusing google_id column for provider_id
+            email      = user_info.email,
+            name       = user_info.name,
+            avatar_url = user_info.avatar_url,
+        )
+        db.add(user)
+
+    db.flush()  # assign user.id before _record_session needs it for new users
+    _record_session(user, request, db)
+    db.commit()
+    token_response = _build_token_response(user)
+
+    origin_from_state = extract_frontend_origin_from_state(state)
+    base_url  = origin_from_state or settings.frontend_url
+    sep       = '&' if '?' in base_url else '?'
+    xcode     = _issue_exchange_code(token_response.access_token)
+    redirect_url = f"{base_url}{sep}{urlencode({'code': xcode})}"
+
+    response = RedirectResponse(url=redirect_url, status_code=302)
+    response.delete_cookie('oauth_state', samesite="none", secure=True)
+    return response
+
+
+# Redirect URIs allowed for native desktop clients (loopback per RFC 8252).
+_DESKTOP_ALLOWED_REDIRECTS: frozenset[str] = frozenset({
+    "http://127.0.0.1:8899/callback",
+    "http://localhost:8899/callback",
+})
+
+
+@router.get(
+    "/google/desktop-url",
+    summary="Return Google OAuth URL for desktop/native app flow",
+    description=(
+        "Desktop clients that cannot use browser redirects call this to obtain "
+        "the Google consent URL with a loopback redirect_uri (RFC 8252). "
+        "They open the URL in the system browser, capture the code on :8899, "
+        "then exchange it via POST /google/token."
+    ),
+)
+def google_desktop_url(redirect_uri: str = Query(..., description="Loopback callback URI")):
+    _require_google_config()
+    if redirect_uri not in _DESKTOP_ALLOWED_REDIRECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"redirect_uri not in desktop allowlist. Allowed: {sorted(_DESKTOP_ALLOWED_REDIRECTS)}",
+        )
+    state = generate_oauth_state()
+    url = _google_auth_url(redirect_uri, state)
+    return {"url": url, "state": state}
 
 
 # ── Mobile / SPA token exchange ───────────────────────────────────────────────
@@ -385,6 +575,7 @@ def list_sessions(
         db.query(UserSession)
         .filter(UserSession.user_id == current_user.id)
         .order_by(UserSession.last_seen_at.desc())
+        .limit(50)
         .all()
     )
 
