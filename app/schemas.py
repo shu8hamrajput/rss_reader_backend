@@ -455,8 +455,8 @@ class FeedSearchResponse(BaseModel):
 
 class DiscoveredFeed(BaseModel):
     feed_url: str
-    title: str | None
-    feed_type: str | None
+    title: str | None = None
+    feed_type: str | None = None
 
 
 class FeedDiscoverResponse(BaseModel):

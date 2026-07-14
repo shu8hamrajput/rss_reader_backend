@@ -57,10 +57,13 @@ def test_cluster_stories_groups_similar_titles_under_new_cluster(db_session, use
     new2 = make_article(db_session, feed, title=title, published_at=datetime.now(timezone.utc))
 
     _cluster_stories(db_session, [new1, new2])
+    db_session.expire(older)  # bulk UPDATE below doesn't sync the ORM identity map
 
     assert new1.story_cluster_id is not None
     assert new1.story_cluster_id == new2.story_cluster_id
-    assert older.story_cluster_id != new1.story_cluster_id  # older row itself isn't updated
+    # older is matched and unclustered, so it's persisted into the same cluster too —
+    # otherwise it would be left behind with story_cluster_id=NULL forever.
+    assert older.story_cluster_id == new1.story_cluster_id
 
 
 def test_cluster_stories_inherits_existing_cluster_id(db_session, user):

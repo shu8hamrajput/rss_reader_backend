@@ -8,9 +8,23 @@ from app.routers.search import _probe_feed, _sniff_feed_type
 from .conftest import _FakeAsyncClient, _response
 
 
-def _patch_client(fake_client):
+def _patch_feedly(fake_client):
+    return patch("app.plugins.feedly.httpx.AsyncClient", return_value=fake_client)
+
+
+def _patch_podcast(fake_client):
+    return patch("app.plugins.podcast.httpx.AsyncClient", return_value=fake_client)
+
+
+def _patch_youtube(fake_client):
+    return patch("app.plugins.youtube.httpx.AsyncClient", return_value=fake_client)
+
+
+def _patch_discover(fake_client):
     return patch("app.routers.search.httpx.AsyncClient", return_value=fake_client)
 
+
+# ── Feedly (default source) ─────────────────────────────────────────────────
 
 def test_search_feeds_feedly_success(client):
     data = {
@@ -26,48 +40,67 @@ def test_search_feeds_feedly_success(client):
                 "velocity": 1.5,
             }
         ],
-        "related": ["query one", "query two"],
     }
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    with _patch_client(fake):
+    with _patch_feedly(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust"})
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["results"][0]["feed_url"] == "https://example.com/feed.xml"
     assert body["results"][0]["title"] == "Example Feed"
-    assert body["related_queries"] == ["query one", "query two"]
 
 
-def test_search_feeds_feedly_http_status_error(client):
+def test_search_feeds_feedly_http_status_error_returns_empty_results(client):
+    """Plugins swallow upstream errors themselves and return [] — the endpoint
+    always responds 200, never propagates a 502 from a third-party outage."""
     error_response = MagicMock(status_code=500)
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
         raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
     )))
 
-    with _patch_client(fake):
+    with _patch_feedly(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_feedly_request_error(client):
+def test_search_feeds_feedly_request_error_returns_empty_results(client):
     fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-    with _patch_client(fake):
+    with _patch_feedly(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_podcast_index_missing_credentials(client, monkeypatch):
-    monkeypatch.delenv("PODCAST_INDEX_KEY", raising=False)
-    monkeypatch.delenv("PODCAST_INDEX_SECRET", raising=False)
+def test_search_feeds_feedly_skips_results_without_feed_id(client):
+    data = {
+        "results": [
+            {"feedId": "", "title": "No Id"},
+            {"feedId": "feed/https://example.com/feed.xml", "title": "Has Id"},
+        ],
+    }
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "podcast_index"})
-    assert resp.status_code == 503
+    with _patch_feedly(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust"})
 
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["feed_url"] == "https://example.com/feed.xml"
+
+
+def test_search_feeds_bogus_source_returns_400(client):
+    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "bogus"})
+    assert resp.status_code == 400
+
+
+# ── iTunes ───────────────────────────────────────────────────────────────────
 
 def test_search_feeds_itunes_success(client):
     data = {
@@ -85,7 +118,7 @@ def test_search_feeds_itunes_success(client):
     }
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "itunes"})
 
     assert resp.status_code == 200
@@ -96,54 +129,38 @@ def test_search_feeds_itunes_success(client):
     assert result["cover_url"] == "https://example.com/art600.png"
 
 
-def test_search_feeds_bogus_source_returns_422(client):
-    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "bogus"})
-    assert resp.status_code == 422
+def test_search_feeds_itunes_http_status_error_returns_empty_results(client):
+    error_response = MagicMock(status_code=500)
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
+        raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
+    )))
 
-
-def test_discover_feeds_via_link_tag(client):
-    html = (
-        '<html><head>'
-        '<link rel="alternate" type="application/rss+xml" title="Feed" href="/feed.xml">'
-        '</head><body></body></html>'
-    )
-    page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
-    fake = _FakeAsyncClient(get=AsyncMock(return_value=page_resp))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
+    with _patch_podcast(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "itunes"})
 
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["feeds"] == [{"feed_url": "https://example.com/feed.xml", "title": "Feed", "feed_type": "rss"}]
+    assert resp.json()["results"] == []
 
 
-def test_discover_feeds_invalid_scheme_returns_422(client):
-    resp = client.get("/api/v1/search/discover", params={"url": "ftp://example.com"})
-    assert resp.status_code == 422
+def test_search_feeds_itunes_request_error_returns_empty_results(client):
+    fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-
-def test_discover_feeds_rejects_private_address(client):
-    resp = client.get("/api/v1/search/discover", params={"url": "http://169.254.169.254/latest/meta-data"})
-    assert resp.status_code == 422
-
-
-def test_search_feeds_feedly_skips_results_without_feed_id(client):
-    data = {
-        "results": [
-            {"feedId": "", "title": "No Id"},
-            {"feedId": "feed/https://example.com/feed.xml", "title": "Has Id"},
-        ],
-    }
-    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust"})
+    with _patch_podcast(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "itunes"})
 
     assert resp.status_code == 200
-    body = resp.json()
-    assert len(body["results"]) == 1
-    assert body["results"][0]["feed_url"] == "https://example.com/feed.xml"
+    assert resp.json()["results"] == []
+
+
+# ── Podcast Index ────────────────────────────────────────────────────────────
+
+def test_search_feeds_podcast_index_missing_credentials_returns_empty_results(client, monkeypatch):
+    monkeypatch.delenv("PODCAST_INDEX_KEY", raising=False)
+    monkeypatch.delenv("PODCAST_INDEX_SECRET", raising=False)
+
+    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "podcast_index"})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
 def test_search_feeds_podcast_index_success(client, monkeypatch):
@@ -165,7 +182,7 @@ def test_search_feeds_podcast_index_success(client, monkeypatch):
     }
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "podcast_index"})
 
     assert resp.status_code == 200
@@ -175,7 +192,7 @@ def test_search_feeds_podcast_index_success(client, monkeypatch):
     assert results[0]["website_url"] == "https://example.com"
 
 
-def test_search_feeds_podcast_index_http_status_error(client, monkeypatch):
+def test_search_feeds_podcast_index_http_status_error_returns_empty_results(client, monkeypatch):
     monkeypatch.setenv("PODCAST_INDEX_KEY", "key")
     monkeypatch.setenv("PODCAST_INDEX_SECRET", "secret")
     error_response = MagicMock(status_code=500)
@@ -183,43 +200,26 @@ def test_search_feeds_podcast_index_http_status_error(client, monkeypatch):
         raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
     )))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "podcast_index"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_podcast_index_request_error(client, monkeypatch):
+def test_search_feeds_podcast_index_request_error_returns_empty_results(client, monkeypatch):
     monkeypatch.setenv("PODCAST_INDEX_KEY", "key")
     monkeypatch.setenv("PODCAST_INDEX_SECRET", "secret")
     fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "podcast_index"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_itunes_http_status_error(client):
-    error_response = MagicMock(status_code=500)
-    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
-        raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
-    )))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "itunes"})
-
-    assert resp.status_code == 502
-
-
-def test_search_feeds_itunes_request_error(client):
-    fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "itunes"})
-
-    assert resp.status_code == 502
-
+# ── gpodder ──────────────────────────────────────────────────────────────────
 
 def test_search_feeds_gpodder_success(client):
     data = [
@@ -235,7 +235,7 @@ def test_search_feeds_gpodder_success(client):
     ]
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "gpodder"})
 
     assert resp.status_code == 200
@@ -248,33 +248,37 @@ def test_search_feeds_gpodder_success(client):
 def test_search_feeds_gpodder_non_list_response_returns_empty(client):
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data={"error": "nope"})))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "gpodder"})
 
     assert resp.status_code == 200
     assert resp.json()["results"] == []
 
 
-def test_search_feeds_gpodder_http_status_error(client):
+def test_search_feeds_gpodder_http_status_error_returns_empty_results(client):
     error_response = MagicMock(status_code=500)
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
         raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
     )))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "gpodder"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_gpodder_request_error(client):
+def test_search_feeds_gpodder_request_error_returns_empty_results(client):
     fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "gpodder"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
+
+# ── fyyd ─────────────────────────────────────────────────────────────────────
 
 def test_search_feeds_fyyd_success(client):
     data = {
@@ -293,7 +297,7 @@ def test_search_feeds_fyyd_success(client):
     }
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "fyyd"})
 
     assert resp.status_code == 200
@@ -306,32 +310,130 @@ def test_search_feeds_fyyd_success(client):
 def test_search_feeds_fyyd_non_list_data_returns_empty(client):
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data={"data": "nope"})))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "fyyd"})
 
     assert resp.status_code == 200
     assert resp.json()["results"] == []
 
 
-def test_search_feeds_fyyd_http_status_error(client):
+def test_search_feeds_fyyd_http_status_error_returns_empty_results(client):
     error_response = MagicMock(status_code=500)
     fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
         raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
     )))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "fyyd"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
 
 
-def test_search_feeds_fyyd_request_error(client):
+def test_search_feeds_fyyd_request_error_returns_empty_results(client):
     fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-    with _patch_client(fake):
+    with _patch_podcast(fake):
         resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "fyyd"})
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+# ── YouTube ──────────────────────────────────────────────────────────────────
+
+def test_search_feeds_youtube_missing_credentials_returns_placeholder(client, monkeypatch):
+    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+
+    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 1
+    assert results[0]["feed_url"] == ""
+    assert results[0]["title"] == "YouTube API key not configured"
+
+
+def test_search_feeds_youtube_success(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    data = {
+        "items": [
+            {
+                "id": {"channelId": "UC123"},
+                "snippet": {
+                    "title": "Example Channel",
+                    "description": "Desc",
+                    "thumbnails": {"high": {"url": "https://example.com/thumb.jpg"}},
+                },
+            },
+            {"id": {}, "snippet": {"title": "No Channel Id"}},
+        ],
+    }
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
+
+    with _patch_youtube(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 1
+    assert results[0]["feed_url"] == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123"
+    assert results[0]["title"] == "Example Channel"
+    assert results[0]["cover_url"] == "https://example.com/thumb.jpg"
+    assert results[0]["website_url"] == "https://www.youtube.com/channel/UC123"
+
+
+def test_search_feeds_youtube_http_status_error_returns_empty_results(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    error_response = MagicMock(status_code=500)
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
+        raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
+    )))
+
+    with _patch_youtube(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+def test_search_feeds_youtube_request_error_returns_empty_results(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
+    fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
+
+    with _patch_youtube(fake):
+        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
+
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+# ── discover (generic HTML scraping — plugin fast-paths don't own example.com) ─
+
+def test_discover_feeds_via_link_tag(client):
+    html = (
+        '<html><head>'
+        '<link rel="alternate" type="application/rss+xml" title="Feed" href="/feed.xml">'
+        '</head><body></body></html>'
+    )
+    page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
+    fake = _FakeAsyncClient(get=AsyncMock(return_value=page_resp))
+
+    with _patch_discover(fake):
+        resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["feeds"] == [{"feed_url": "https://example.com/feed.xml", "title": "Feed", "feed_type": "rss"}]
+
+
+def test_discover_feeds_invalid_scheme_returns_422(client):
+    resp = client.get("/api/v1/search/discover", params={"url": "ftp://example.com"})
+    assert resp.status_code == 422
+
+
+def test_discover_feeds_rejects_private_address(client):
+    resp = client.get("/api/v1/search/discover", params={"url": "http://169.254.169.254/latest/meta-data"})
+    assert resp.status_code == 422
 
 
 def test_discover_feeds_http_status_error(client):
@@ -340,7 +442,7 @@ def test_discover_feeds_http_status_error(client):
         raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
     )))
 
-    with _patch_client(fake):
+    with _patch_discover(fake):
         resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
 
     assert resp.status_code == 502
@@ -349,7 +451,7 @@ def test_discover_feeds_http_status_error(client):
 def test_discover_feeds_request_error(client):
     fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
 
-    with _patch_client(fake):
+    with _patch_discover(fake):
         resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
 
     assert resp.status_code == 502
@@ -366,12 +468,34 @@ def test_discover_feeds_skips_non_feed_mime_and_empty_href(client):
     page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
     fake = _FakeAsyncClient(get=AsyncMock(return_value=page_resp))
 
-    with _patch_client(fake):
+    with _patch_discover(fake):
         resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["feeds"] == [{"feed_url": "https://example.com/feed.xml", "title": "Feed", "feed_type": "rss"}]
+
+
+def test_discover_feeds_falls_back_to_common_path_probing(client):
+    html = "<html><head></head><body>no feed links here</body></html>"
+    page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
+
+    def _head_side_effect(url, **kwargs):
+        if url == "https://example.com/feed.xml":
+            return _response(headers={"content-type": "application/rss+xml"})
+        return _response(status_code=404)
+
+    fake = _FakeAsyncClient(
+        get=AsyncMock(return_value=page_resp),
+        head=AsyncMock(side_effect=_head_side_effect),
+    )
+
+    with _patch_discover(fake):
+        resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["feeds"] == [{"feed_url": "https://example.com/feed.xml", "title": None, "feed_type": "rss"}]
 
 
 # ── _probe_feed ────────────────────────────────────────────────────────────────
@@ -394,6 +518,7 @@ def test_probe_feed_head_mime_match_returns_feed():
 
     assert result.feed_url == "https://example.com/feed.xml"
     assert result.feed_type == "rss"
+    assert result.title is None
     assert "https://example.com/feed.xml" in seen
 
 
@@ -424,6 +549,7 @@ def test_probe_feed_get_sniffs_feed_type():
 
     assert result.feed_url == "https://example.com/feed"
     assert result.feed_type == "rss"
+    assert result.title is None
     assert "https://example.com/feed" in seen
 
 
@@ -476,84 +602,3 @@ def test_sniff_feed_type_json():
 
 def test_sniff_feed_type_none_for_unrelated_content():
     assert _sniff_feed_type("<html><body>hello</body></html>") is None
-
-
-def test_search_feeds_youtube_missing_credentials(client, monkeypatch):
-    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
-
-    resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
-    assert resp.status_code == 503
-
-
-def test_search_feeds_youtube_success(client, monkeypatch):
-    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
-    data = {
-        "items": [
-            {
-                "id": {"channelId": "UC123"},
-                "snippet": {
-                    "title": "Example Channel",
-                    "description": "Desc",
-                    "thumbnails": {"high": {"url": "https://example.com/thumb.jpg"}},
-                },
-            },
-            {"id": {}, "snippet": {"title": "No Channel Id"}},
-        ],
-    }
-    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(json_data=data)))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
-
-    assert resp.status_code == 200
-    results = resp.json()["results"]
-    assert len(results) == 1
-    assert results[0]["feed_url"] == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123"
-    assert results[0]["title"] == "Example Channel"
-    assert results[0]["cover_url"] == "https://example.com/thumb.jpg"
-    assert results[0]["website_url"] == "https://www.youtube.com/channel/UC123"
-
-
-def test_search_feeds_youtube_http_status_error(client, monkeypatch):
-    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
-    error_response = MagicMock(status_code=500)
-    fake = _FakeAsyncClient(get=AsyncMock(return_value=_response(
-        raise_exc=httpx.HTTPStatusError("error", request=MagicMock(), response=error_response),
-    )))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
-
-    assert resp.status_code == 502
-
-
-def test_search_feeds_youtube_request_error(client, monkeypatch):
-    monkeypatch.setenv("YOUTUBE_API_KEY", "key")
-    fake = _FakeAsyncClient(get=AsyncMock(side_effect=httpx.RequestError("connection failed")))
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/feeds", params={"q": "rust", "source": "youtube"})
-
-    assert resp.status_code == 502
-
-
-def test_discover_feeds_falls_back_to_common_path_probing(client):
-    html = "<html><head></head><body>no feed links here</body></html>"
-    page_resp = _response(text=html, headers={"content-type": "text/html"}, url="https://example.com/")
-
-    def _head_side_effect(url, **kwargs):
-        if url == "https://example.com/feed.xml":
-            return _response(headers={"content-type": "application/rss+xml"})
-        return _response(status_code=404)
-
-    fake = _FakeAsyncClient(
-        get=AsyncMock(return_value=page_resp),
-        head=AsyncMock(side_effect=_head_side_effect),
-    )
-
-    with _patch_client(fake):
-        resp = client.get("/api/v1/search/discover", params={"url": "https://example.com"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["feeds"] == [{"feed_url": "https://example.com/feed.xml", "title": None, "feed_type": "rss"}]

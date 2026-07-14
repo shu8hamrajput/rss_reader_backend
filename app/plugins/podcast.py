@@ -167,6 +167,9 @@ class PodcastPlugin(DiscoveryPlugin):
         except Exception as exc:
             logger.warning("fyyd search failed: %s", exc)
             return []
+        items = resp.json().get("data", [])
+        if not isinstance(items, list):
+            items = []
         return [
             SearchResult(
                 feed_url    = item["xmlURL"],
@@ -177,6 +180,6 @@ class PodcastPlugin(DiscoveryPlugin):
                 language    = item.get("language"),
                 cover_url   = item.get("layoutImageURL") or item.get("smallImageURL"),
             )
-            for item in resp.json().get("data", [])
+            for item in items
             if item.get("xmlURL")
         ]

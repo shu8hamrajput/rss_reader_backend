@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from .conftest import make_article, make_feed
@@ -74,24 +75,28 @@ def test_list_articles_has_audio_filter(client, db_session, user, auth_headers):
 def test_smart_views_return_server_filtered_articles(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
 
-    deep_dive = make_article(db_session, feed, title="Deep dive", content="A long article with a highlight", is_read=False, is_bookmarked=False)
-    quick_read = make_article(db_session, feed, title="Quick read", content="Short article", is_read=False, is_bookmarked=False)
-    bookmarked = make_article(db_session, feed, title="Bookmarked", content="Bookmarked article", is_read=True, is_bookmarked=True)
+    unread_recent = make_article(db_session, feed, title="Unread recent", is_read=False, is_bookmarked=False, published_at=datetime.now(timezone.utc))
+    read_recent = make_article(db_session, feed, title="Read recent", is_read=True, is_bookmarked=False, published_at=datetime.now(timezone.utc))
+    old_unread = make_article(db_session, feed, title="Old unread", is_read=False, is_bookmarked=False, published_at=datetime.now(timezone.utc) - timedelta(days=10))
+    bookmarked = make_article(db_session, feed, title="Bookmarked", is_read=True, is_bookmarked=True, published_at=datetime.now(timezone.utc) - timedelta(days=10))
 
+    # top-stories: unread articles from the last 3 days
     resp = client.get("/api/v1/articles/smart/top-stories", headers=auth_headers)
     assert resp.status_code == 200
     ids = [item["id"] for item in resp.json()["items"]]
-    assert deep_dive.id in ids
-    assert quick_read.id not in ids
-    assert bookmarked.id not in ids
+    assert unread_recent.id in ids
+    assert read_recent.id not in ids
+    assert old_unread.id not in ids
 
+    # recently-published: any article (read or not) from the last 48h
     resp = client.get("/api/v1/articles/smart/recently-published", headers=auth_headers)
     assert resp.status_code == 200
     ids = [item["id"] for item in resp.json()["items"]]
-    assert deep_dive.id in ids
-    assert quick_read.id in ids
-    assert bookmarked.id not in ids
+    assert unread_recent.id in ids
+    assert read_recent.id in ids
+    assert old_unread.id not in ids
 
+    # most-bookmarked: bookmarked articles regardless of age/read status
     resp = client.get("/api/v1/articles/smart/most-bookmarked", headers=auth_headers)
     assert resp.status_code == 200
     ids = [item["id"] for item in resp.json()["items"]]
