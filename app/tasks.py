@@ -470,6 +470,35 @@ def prune_excess_articles() -> int:
         db.close()
 
 
+def _expire_trial_feeds(db: Session) -> int:
+    """Deactivate (pause) feeds whose trial period has passed without being kept.
+
+    Deactivating rather than deleting means the subscription, its articles, and
+    history are preserved — the user can reactivate via the existing is_active
+    toggle if they change their mind.
+    """
+    now = datetime.now(timezone.utc)
+    expired = db.query(Feed).filter(
+        Feed.trial_expires_at.isnot(None),
+        Feed.trial_expires_at < now,
+        Feed.is_active == True,
+    ).all()
+    for feed in expired:
+        feed.is_active = False
+        feed.trial_expires_at = None
+    db.commit()
+    return len(expired)
+
+
+@celery_app.task(name="app.tasks.expire_trial_feeds")
+def expire_trial_feeds() -> int:
+    db = SessionLocal()
+    try:
+        return _expire_trial_feeds(db)
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.refresh_feed_by_id")
 def refresh_feed_by_id(feed_id: int) -> int:
     """Refresh a single feed by ID. Returns the new-article count."""

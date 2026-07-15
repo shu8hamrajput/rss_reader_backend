@@ -11,6 +11,7 @@ from app.tasks import (
     _cluster_stories,
     _condition_matches,
     _estimate_read_time,
+    _expire_trial_feeds,
     _fire_webhooks_sync,
     _is_due_for_refresh,
     _jaccard,
@@ -206,6 +207,38 @@ def test_prune_excess_articles_ignores_feeds_without_cap(db_session, user):
     deleted = _prune_excess_articles(db_session)
 
     assert deleted == 0
+
+
+def test_expire_trial_feeds_deactivates_past_expiry(db_session, user):
+    feed = make_feed(db_session, user, trial_expires_at=datetime.now(timezone.utc) - timedelta(days=1), is_active=True)
+
+    expired_count = _expire_trial_feeds(db_session)
+
+    db_session.refresh(feed)
+    assert expired_count == 1
+    assert feed.is_active is False
+    assert feed.trial_expires_at is None
+
+
+def test_expire_trial_feeds_leaves_unexpired_trials_alone(db_session, user):
+    feed = make_feed(db_session, user, trial_expires_at=datetime.now(timezone.utc) + timedelta(days=5), is_active=True)
+
+    expired_count = _expire_trial_feeds(db_session)
+
+    db_session.refresh(feed)
+    assert expired_count == 0
+    assert feed.is_active is True
+    assert feed.trial_expires_at is not None
+
+
+def test_expire_trial_feeds_ignores_feeds_without_trial(db_session, user):
+    feed = make_feed(db_session, user, trial_expires_at=None, is_active=True)
+
+    expired_count = _expire_trial_feeds(db_session)
+
+    db_session.refresh(feed)
+    assert expired_count == 0
+    assert feed.is_active is True
 
 
 def test_tag_list(db_session, user):

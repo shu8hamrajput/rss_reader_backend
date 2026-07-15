@@ -334,6 +334,7 @@ class FeedResponse(BaseModel):
     mute_keywords: str | None = None
     boost_keywords: str | None = None
     min_content_length: int | None = None
+    trial_expires_at: Optional[datetime] = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
@@ -362,6 +363,10 @@ class FeedResponse(BaseModel):
 
 class FeedSnoozeRequest(BaseModel):
     days: int = 30
+
+
+class FeedTrialRequest(BaseModel):
+    days: int = 14
 
 
 class FeedListResponse(BaseModel):

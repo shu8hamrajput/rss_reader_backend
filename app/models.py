@@ -151,6 +151,10 @@ class Feed(Base):
     # When set, new articles whose combined title+summary+content length falls
     # short are skipped on ingest — filters out link-only stubs and teaser posts.
     min_content_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Set when the user starts a trial subscription for this feed. The daily prune
+    # task deactivates the feed once this passes, unless explicitly kept (cleared)
+    # first — lowers the cost of trying a feed without committing to it forever.
+    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(
