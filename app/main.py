@@ -262,6 +262,11 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ",
             # How the feed was added — manual/search/onboarding/opml_import/collection
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS discovered_via VARCHAR(32) NOT NULL DEFAULT 'manual'",
+            # Per-feed quiet hours (0-23, user's local timezone); NULL = no quiet hours
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS quiet_hours_start INTEGER",
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS quiet_hours_end INTEGER",
+            # User's IANA timezone, drives per-feed quiet hours
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) NOT NULL DEFAULT 'UTC'",
         ]
         for stmt in stmts:
             try:

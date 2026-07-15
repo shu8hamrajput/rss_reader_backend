@@ -527,3 +527,51 @@ def test_update_feed_min_content_length_rejects_out_of_range(client, db_session,
 
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"min_content_length": -5}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+def test_update_feed_quiet_hours(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.quiet_hours_start is None
+    assert feed.quiet_hours_end is None
+
+    resp = client.patch(
+        f"/api/v1/feeds/{feed.id}",
+        json={"quiet_hours_start": 22, "quiet_hours_end": 7},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["quiet_hours_start"] == 22
+    assert body["quiet_hours_end"] == 7
+
+
+def test_update_feed_quiet_hours_clears_with_minus_one(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, quiet_hours_start=22, quiet_hours_end=7)
+
+    resp = client.patch(
+        f"/api/v1/feeds/{feed.id}",
+        json={"quiet_hours_start": -1, "quiet_hours_end": -1},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["quiet_hours_start"] is None
+    assert body["quiet_hours_end"] is None
+
+
+def test_update_feed_quiet_hours_requires_both_bounds(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"quiet_hours_start": 22}, headers=auth_headers)
+    assert resp.status_code == 422
+
+
+def test_update_feed_quiet_hours_rejects_out_of_range(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(
+        f"/api/v1/feeds/{feed.id}",
+        json={"quiet_hours_start": 5, "quiet_hours_end": 24},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
