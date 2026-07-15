@@ -148,6 +148,9 @@ class Feed(Base):
     # articles get a "boosted" tag added instead of being filtered.
     mute_keywords: Mapped[str | None] = mapped_column(String(500), nullable=True)
     boost_keywords: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # When set, new articles whose combined title+summary+content length falls
+    # short are skipped on ingest — filters out link-only stubs and teaser posts.
+    min_content_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

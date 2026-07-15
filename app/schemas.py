@@ -226,12 +226,21 @@ class FeedUpdate(BaseModel):
     webhook_eligible: bool | None = None
     mute_keywords: str | None = None
     boost_keywords: str | None = None
+    min_content_length: int | None = None
 
     @field_validator("mute_keywords", "boost_keywords")
     @classmethod
     def keywords_max_length(cls, v: str | None) -> str | None:
         if v is not None and len(v) > 500:
             raise ValueError("keyword list must be 500 characters or fewer")
+        return v
+
+    @field_validator("min_content_length")
+    @classmethod
+    def valid_min_content_length(cls, v: int | None) -> int | None:
+        # 0 is accepted as a "clear the filter, keep everything" sentinel.
+        if v is not None and v != 0 and not (1 <= v <= 100000):
+            raise ValueError("min_content_length must be 0 (clear filter) or between 1 and 100000")
         return v
 
     @field_validator("refresh_interval_minutes")
@@ -324,6 +333,7 @@ class FeedResponse(BaseModel):
     webhook_eligible: bool = True
     mute_keywords: str | None = None
     boost_keywords: str | None = None
+    min_content_length: int | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 

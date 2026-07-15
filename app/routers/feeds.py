@@ -289,6 +289,8 @@ def update_feed(
         feed.mute_keywords = payload.mute_keywords.strip() or None
     if payload.boost_keywords is not None:
         feed.boost_keywords = payload.boost_keywords.strip() or None
+    if payload.min_content_length is not None:
+        feed.min_content_length = payload.min_content_length or None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)
