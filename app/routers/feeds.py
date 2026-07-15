@@ -168,7 +168,7 @@ async def create_feed(
                 detail=f"Your plan allows up to {max_feeds} feeds. Upgrade to subscribe to more.",
             )
 
-    feed = Feed(url=feed_url, title=payload.title, user_id=current_user.id)
+    feed = Feed(url=feed_url, title=payload.title, user_id=current_user.id, discovered_via=payload.discovered_via or "manual")
     db.add(feed)
     db.flush()
 

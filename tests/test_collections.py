@@ -126,6 +126,10 @@ def test_subscribe_collection_adds_feeds_and_is_idempotent(client, db_session, o
     db_session.refresh(collection)
     assert collection.subscriber_count == 1
 
+    from app.models import Feed
+    added_feed = db_session.query(Feed).filter(Feed.url == "https://example.com/sub-a.xml").first()
+    assert added_feed.discovered_via == "collection"
+
     resp = client.post(f"/api/v1/collections/{collection.id}/subscribe", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json() == {"subscribed": True, "feeds_added": 0}

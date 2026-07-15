@@ -260,6 +260,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS min_content_length INTEGER",
             # Trial-subscription expiry; NULL = not a trial (or already kept)
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ",
+            # How the feed was added — manual/search/onboarding/opml_import/collection
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS discovered_via VARCHAR(32) NOT NULL DEFAULT 'manual'",
         ]
         for stmt in stmts:
             try:

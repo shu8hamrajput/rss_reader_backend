@@ -18,7 +18,28 @@ def test_create_feed(client, auth_headers):
     assert body["categories"] == []
     assert body["article_count"] == 0
     assert body["unread_count"] == 0
+    assert body["discovered_via"] == "manual"
     mock_refresh.assert_awaited_once()
+
+
+def test_create_feed_with_discovered_via(client, auth_headers):
+    with patch("app.routers.feeds.refresh_feed", new_callable=AsyncMock, return_value=0):
+        resp = client.post(
+            "/api/v1/feeds",
+            json={"url": "https://example.com/found.xml", "discovered_via": "search"},
+            headers=auth_headers,
+        )
+    assert resp.status_code == 201
+    assert resp.json()["discovered_via"] == "search"
+
+
+def test_create_feed_rejects_invalid_discovered_via(client, auth_headers):
+    resp = client.post(
+        "/api/v1/feeds",
+        json={"url": "https://example.com/bad.xml", "discovered_via": "not_a_real_source"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
 
 
 def test_create_feed_duplicate_url_conflicts(client, db_session, user, auth_headers):

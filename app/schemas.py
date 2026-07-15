@@ -189,10 +189,14 @@ class CategoryResponse(BaseModel):
 
 # ── Feed schemas ─────────────────────────────────────────────────────────────
 
+VALID_DISCOVERED_VIA = {"manual", "search", "onboarding", "opml_import", "collection"}
+
+
 class FeedCreate(BaseModel):
     url: str
     title: str | None = None
     category_ids: list[int] = []
+    discovered_via: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -200,6 +204,13 @@ class FeedCreate(BaseModel):
         if not v.strip():
             raise ValueError("url must not be empty")
         return v.strip()
+
+    @field_validator("discovered_via")
+    @classmethod
+    def valid_discovered_via(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_DISCOVERED_VIA:
+            raise ValueError(f"discovered_via must be one of {sorted(VALID_DISCOVERED_VIA)}")
+        return v
 
 
 VALID_IMPORTANCE_TIERS = {"must_read", "casual", "archive_only"}
@@ -335,6 +346,7 @@ class FeedResponse(BaseModel):
     boost_keywords: str | None = None
     min_content_length: int | None = None
     trial_expires_at: Optional[datetime] = None
+    discovered_via: str = "manual"
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 
