@@ -469,3 +469,27 @@ def test_update_feed_keywords_rejects_too_long(client, db_session, user, auth_he
 
     resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"mute_keywords": "x" * 501}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+def test_update_feed_min_content_length(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.min_content_length is None
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"min_content_length": 200}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["min_content_length"] == 200
+
+
+def test_update_feed_min_content_length_zero_clears_override(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user, min_content_length=200)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"min_content_length": 0}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["min_content_length"] is None
+
+
+def test_update_feed_min_content_length_rejects_out_of_range(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+
+    resp = client.patch(f"/api/v1/feeds/{feed.id}", json={"min_content_length": -5}, headers=auth_headers)
+    assert resp.status_code == 422

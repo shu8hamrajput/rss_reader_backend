@@ -13,6 +13,7 @@ from app.plugins.base import ParsedArticle, ParsedFeed
 from app.plugins.default import _get_content, _get_thumbnail, _parse_date
 from app.services.feed_parser import (
     _apply_feed_meta,
+    _content_length,
     _matches_any_keyword,
     _parse_keywords,
     _write_articles,
@@ -354,6 +355,50 @@ def test_write_articles_no_keywords_configured_unaffected(db_session, user):
     assert new_count == 1
     article = db_session.query(Article).filter(Article.feed_id == feed.id, Article.guid == "g1").one()
     assert article.tags is None
+
+
+# ── min_content_length ────────────────────────────────────────────────────────
+
+def test_content_length_combines_title_summary_content():
+    art = ParsedArticle(guid="g1", title="Hi", summary="there", content="world")
+    assert _content_length(art) == len("Hi there world")
+
+
+def test_write_articles_drops_short_content_below_threshold(db_session, user):
+    feed = make_feed(db_session, user, min_content_length=50)
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="short", title="Short stub", summary="Read more →"),
+        ParsedArticle(guid="long", title="A substantial article", summary="With plenty of real summary content to clear the bar"),
+    ])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+    guids = {a.guid for a in db_session.query(Article).filter(Article.feed_id == feed.id).all()}
+    assert guids == {"long"}
+
+
+def test_write_articles_min_content_length_exempts_transcripts(db_session, user):
+    feed = make_feed(db_session, user, min_content_length=1000)
+    parsed = ParsedFeed(articles=[
+        ParsedArticle(guid="pod", title="Ep 1", summary="short", media_type="audio/mpeg"),
+    ])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
+
+
+def test_write_articles_no_min_content_length_configured_unaffected(db_session, user):
+    feed = make_feed(db_session, user, min_content_length=None)
+    parsed = ParsedFeed(articles=[ParsedArticle(guid="g1", title="x")])
+
+    new_count = _write_articles(feed, parsed, db_session)
+    db_session.commit()
+
+    assert new_count == 1
 
 
 # ── _apply_feed_meta ─────────────────────────────────────────────────────────

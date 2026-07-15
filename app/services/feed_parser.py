@@ -71,6 +71,10 @@ def _is_transcript_content(art: ParsedArticle) -> bool:
     return art.media_type == "video/youtube" or bool(art.media_type and art.media_type.startswith("audio/"))
 
 
+def _content_length(art: ParsedArticle) -> int:
+    return len(" ".join(filter(None, [art.title, art.summary, art.content])))
+
+
 def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
     existing_guids: set[str] = {
         row[0] for row in db.query(Article.guid).filter(Article.feed_id == feed.id).all()
@@ -103,6 +107,11 @@ def _write_articles(feed: Feed, parsed: ParsedFeed, db: Session) -> int:
         # mute_keywords drops the article on ingest entirely — checked before
         # boost, since a title matching both is a signal the user wants gone.
         if _matches_any_keyword(art, mute_keywords):
+            continue
+        # Link-only stubs/teasers rarely clear a length threshold. Transcript
+        # content (podcast/video) is exempt — its "text" is naturally short
+        # regardless of how substantial the actual episode is.
+        if feed.min_content_length and not _is_transcript_content(art) and _content_length(art) < feed.min_content_length:
             continue
         tags = list(art.tags)
         if _matches_any_keyword(art, boost_keywords) and "boosted" not in tags:

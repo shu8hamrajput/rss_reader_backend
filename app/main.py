@@ -256,6 +256,8 @@ def _migrate() -> None:
             # Comma-separated keyword lists for per-feed mute (skip on ingest) / boost (tag) filtering
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS mute_keywords VARCHAR(500)",
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS boost_keywords VARCHAR(500)",
+            # Per-feed minimum content length (chars); NULL = no filter
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS min_content_length INTEGER",
         ]
         for stmt in stmts:
             try:
