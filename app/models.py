@@ -155,6 +155,10 @@ class Feed(Base):
     # task deactivates the feed once this passes, unless explicitly kept (cleared)
     # first — lowers the cost of trying a feed without committing to it forever.
     trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Records how this feed was added — "manual" | "search" | "onboarding" |
+    # "opml_import" | "collection" — set once at creation, not user-editable.
+    # Lets feeds be grouped by discovery source rather than only by category.
+    discovered_via: Mapped[str] = mapped_column(String(32), default="manual", nullable=False, server_default="'manual'")
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

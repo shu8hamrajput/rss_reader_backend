@@ -91,7 +91,7 @@ async def import_feeds(
                 category_cache[imp_feed.category] = cat
             cat = category_cache[imp_feed.category]
 
-        feed = Feed(url=imp_feed.url, title=imp_feed.title, user_id=current_user.id)
+        feed = Feed(url=imp_feed.url, title=imp_feed.title, user_id=current_user.id, discovered_via="opml_import")
         if cat:
             feed.categories.append(cat)
         db.add(feed)

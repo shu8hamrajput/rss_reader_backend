@@ -306,7 +306,7 @@ def subscribe_collection(
             continue
         if max_feeds is not None and feed_count >= max_feeds:
             break
-        feed = Feed(url=item.feed_url, title=item.title, user_id=current_user.id)
+        feed = Feed(url=item.feed_url, title=item.title, user_id=current_user.id, discovered_via="collection")
         db.add(feed)
         existing_urls.add(norm)
         feed_count += 1

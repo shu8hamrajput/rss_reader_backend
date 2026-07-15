@@ -39,6 +39,7 @@ def test_import_opml_creates_feeds_and_category(client, db_session, user, auth_h
     assert cat is not None
     tech_feed = db_session.query(Feed).filter(Feed.url == "https://example.com/tech.xml").first()
     assert cat in tech_feed.categories
+    assert tech_feed.discovered_via == "opml_import"
 
 
 def test_import_opml_skips_existing_subscription(client, db_session, user, auth_headers):
