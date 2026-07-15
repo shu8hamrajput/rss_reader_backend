@@ -14,6 +14,7 @@ from ..schemas import (
     FeedListResponse,
     FeedResponse,
     FeedSnoozeRequest,
+    FeedTrialRequest,
     FeedUpdate,
     RefreshResult,
 )
@@ -320,6 +321,33 @@ def unsnooze_feed(
 ):
     feed = _owned_feed(feed_id, current_user, db)
     feed.health_snooze_until = None
+    db.commit()
+    db.refresh(feed)
+    return _build_feed_response(feed, db)
+
+
+@router.post("/{feed_id}/trial", response_model=FeedResponse, summary="Start a trial subscription for a feed")
+def start_trial(
+    feed_id: int,
+    payload: FeedTrialRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    feed = _owned_feed(feed_id, current_user, db)
+    feed.trial_expires_at = datetime.now(timezone.utc) + timedelta(days=max(1, min(payload.days, 365)))
+    db.commit()
+    db.refresh(feed)
+    return _build_feed_response(feed, db)
+
+
+@router.delete("/{feed_id}/trial", response_model=FeedResponse, summary="Keep a feed past its trial (cancel expiry)")
+def keep_feed(
+    feed_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    feed = _owned_feed(feed_id, current_user, db)
+    feed.trial_expires_at = None
     db.commit()
     db.refresh(feed)
     return _build_feed_response(feed, db)

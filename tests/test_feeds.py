@@ -254,6 +254,19 @@ def test_snooze_and_unsnooze_feed(client, db_session, user, auth_headers):
     assert resp.json()["health_snooze_until"] is None
 
 
+def test_start_trial_and_keep_feed(client, db_session, user, auth_headers):
+    feed = make_feed(db_session, user)
+    assert feed.trial_expires_at is None
+
+    resp = client.post(f"/api/v1/feeds/{feed.id}/trial", json={"days": 14}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["trial_expires_at"] is not None
+
+    resp = client.delete(f"/api/v1/feeds/{feed.id}/trial", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["trial_expires_at"] is None
+
+
 def test_delete_feed_cascades_articles(client, db_session, user, auth_headers):
     feed = make_feed(db_session, user)
     article = make_article(db_session, feed)

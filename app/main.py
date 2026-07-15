@@ -258,6 +258,8 @@ def _migrate() -> None:
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS boost_keywords VARCHAR(500)",
             # Per-feed minimum content length (chars); NULL = no filter
             "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS min_content_length INTEGER",
+            # Trial-subscription expiry; NULL = not a trial (or already kept)
+            "ALTER TABLE feeds ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ",
         ]
         for stmt in stmts:
             try:

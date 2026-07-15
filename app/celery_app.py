@@ -39,5 +39,9 @@ celery_app.conf.update(
             "task": "app.tasks.prune_excess_articles",
             "schedule": 24 * 60 * 60,
         },
+        "expire-trial-feeds": {
+            "task": "app.tasks.expire_trial_feeds",
+            "schedule": 24 * 60 * 60,
+        },
     },
 )
