@@ -55,7 +55,7 @@ def _consume_exchange_code(code: str) -> str:
 from ..database import get_db
 from ..models import User, UserPreferences, UserSession
 import secrets
-from ..schemas import ApiTokenResponse, GoogleTokenRequest, PreferencesResponse, PreferencesUpdate, SessionResponse, TokenResponse, UserResponse
+from ..schemas import ApiTokenResponse, GoogleTokenRequest, PreferencesResponse, PreferencesUpdate, SessionResponse, TokenResponse, UserResponse, UserTimezoneUpdate
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -424,6 +424,22 @@ def refresh_token(current_user: User = Depends(get_current_user)):
     summary="Get the currently authenticated user",
 )
 def get_me(current_user: User = Depends(get_current_user)):
+    return UserResponse.model_validate(current_user)
+
+
+@router.patch(
+    "/me/timezone",
+    response_model=UserResponse,
+    summary="Set the current user's IANA timezone (drives per-feed quiet hours)",
+)
+def update_my_timezone(
+    payload: UserTimezoneUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.timezone = payload.timezone
+    db.commit()
+    db.refresh(current_user)
     return UserResponse.model_validate(current_user)
 
 

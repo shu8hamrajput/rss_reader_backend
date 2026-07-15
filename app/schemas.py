@@ -23,6 +23,7 @@ class UserResponse(BaseModel):
     # searches, ...) — opaque to the backend, merged shallowly on update
     preferences: dict | None = None
     api_token: str | None = None
+    timezone: str = "UTC"
 
     @computed_field
     @property
@@ -32,6 +33,20 @@ class UserResponse(BaseModel):
 
 class ApiTokenResponse(BaseModel):
     api_token: str
+
+
+class UserTimezoneUpdate(BaseModel):
+    timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except ZoneInfoNotFoundError:
+            raise ValueError(f"Unknown IANA timezone: {v!r}")
+        return v
 
 
 # ── Search Alert schemas ──────────────────────────────────────────────────────
@@ -238,6 +253,8 @@ class FeedUpdate(BaseModel):
     mute_keywords: str | None = None
     boost_keywords: str | None = None
     min_content_length: int | None = None
+    quiet_hours_start: int | None = None
+    quiet_hours_end: int | None = None
 
     @field_validator("mute_keywords", "boost_keywords")
     @classmethod
@@ -253,6 +270,22 @@ class FeedUpdate(BaseModel):
         if v is not None and v != 0 and not (1 <= v <= 100000):
             raise ValueError("min_content_length must be 0 (clear filter) or between 1 and 100000")
         return v
+
+    @field_validator("quiet_hours_start", "quiet_hours_end")
+    @classmethod
+    def valid_quiet_hour(cls, v: int | None) -> int | None:
+        # -1 is accepted as a "clear the window, no quiet hours" sentinel — 0 itself
+        # is a valid hour (midnight), so it can't double as the clear sentinel here.
+        if v is not None and v != -1 and not (0 <= v <= 23):
+            raise ValueError("quiet hour must be -1 (clear) or between 0 and 23")
+        return v
+
+    @model_validator(mode="after")
+    def quiet_hours_set_together(self) -> "FeedUpdate":
+        # Both-or-neither: a single bound alone is ambiguous (no window to suppress).
+        if (self.quiet_hours_start is None) != (self.quiet_hours_end is None):
+            raise ValueError("quiet_hours_start and quiet_hours_end must be set together")
+        return self
 
     @field_validator("refresh_interval_minutes")
     @classmethod
@@ -347,6 +380,8 @@ class FeedResponse(BaseModel):
     min_content_length: int | None = None
     trial_expires_at: Optional[datetime] = None
     discovered_via: str = "manual"
+    quiet_hours_start: int | None = None
+    quiet_hours_end: int | None = None
     # Computed: True when the feed has unread articles nobody has read in 30+ days
     suggest_unsubscribe: bool = False
 

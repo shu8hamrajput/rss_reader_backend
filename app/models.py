@@ -50,6 +50,10 @@ class User(Base):
     api_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # IANA timezone name (e.g. "America/New_York"); drives per-feed quiet hours.
+    # A first-class, validated column rather than the opaque `preferences` blob,
+    # since backend logic (quiet-hours webhook gating) depends on its correctness.
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False, server_default="'UTC'")
 
     feeds: Mapped[list["Feed"]] = relationship("Feed", back_populates="user", cascade="all, delete-orphan")
     categories: Mapped[list["Category"]] = relationship("Category", back_populates="user", cascade="all, delete-orphan")
@@ -159,6 +163,12 @@ class Feed(Base):
     # "opml_import" | "collection" — set once at creation, not user-editable.
     # Lets feeds be grouped by discovery source rather than only by category.
     discovered_via: Mapped[str] = mapped_column(String(32), default="manual", nullable=False, server_default="'manual'")
+    # Quiet hours (0-23, in the owning user's timezone). When both are set,
+    # "new_article" webhook delivery for this feed is suppressed during the
+    # window — SSE live-notification and alert matching are unaffected, same
+    # scope as webhook_eligible. Wraps midnight when start > end.
+    quiet_hours_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quiet_hours_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="feeds")
     articles: Mapped[list["Article"]] = relationship(

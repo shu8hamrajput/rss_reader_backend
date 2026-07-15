@@ -13,6 +13,7 @@ from app.tasks import (
     _estimate_read_time,
     _expire_trial_feeds,
     _fire_webhooks_sync,
+    _in_quiet_hours,
     _is_due_for_refresh,
     _jaccard,
     _match_alerts,
@@ -117,6 +118,44 @@ def test_is_due_for_refresh_after_interval_elapsed_is_due(db_session, user):
     now = datetime.now(timezone.utc)
     feed = make_feed(db_session, user, refresh_interval_minutes=120, last_fetched_at=now - timedelta(minutes=121))
     assert _is_due_for_refresh(feed, now) is True
+
+
+def test_in_quiet_hours_no_window_never_quiet(db_session, user):
+    feed = make_feed(db_session, user, quiet_hours_start=None, quiet_hours_end=None)
+    assert _in_quiet_hours(feed, datetime.now(timezone.utc)) is False
+
+
+def test_in_quiet_hours_within_normal_window(db_session, user):
+    feed = make_feed(db_session, user, quiet_hours_start=22, quiet_hours_end=23)
+    now = datetime(2026, 1, 1, 22, 30, tzinfo=timezone.utc)
+    assert _in_quiet_hours(feed, now) is True
+
+
+def test_in_quiet_hours_outside_normal_window(db_session, user):
+    feed = make_feed(db_session, user, quiet_hours_start=22, quiet_hours_end=23)
+    now = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    assert _in_quiet_hours(feed, now) is False
+
+
+def test_in_quiet_hours_wraps_midnight(db_session, user):
+    feed = make_feed(db_session, user, quiet_hours_start=22, quiet_hours_end=6)
+    late_night = datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)
+    early_morning = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
+    midday = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    assert _in_quiet_hours(feed, late_night) is True
+    assert _in_quiet_hours(feed, early_morning) is True
+    assert _in_quiet_hours(feed, midday) is False
+
+
+def test_in_quiet_hours_respects_user_timezone(db_session, user):
+    user.timezone = "America/New_York"
+    db_session.commit()
+    feed = make_feed(db_session, user, quiet_hours_start=22, quiet_hours_end=23)
+    # 2026-01-01T22:30 in America/New_York (UTC-5 in January) is 03:30 UTC the next day
+    now_utc = datetime(2026, 1, 2, 3, 30, tzinfo=timezone.utc)
+    assert _in_quiet_hours(feed, now_utc) is True
+    # The same UTC instant would NOT be in quiet hours if read as UTC (03:30, outside 22-23)
+    assert _in_quiet_hours(feed, now_utc) != (22 <= now_utc.hour < 23)
 
 
 def test_prune_expired_articles_deletes_past_retention_window(db_session, user):

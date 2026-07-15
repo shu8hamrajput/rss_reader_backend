@@ -14,6 +14,7 @@ import re
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from sqlalchemy import text
@@ -316,6 +317,27 @@ def _is_due_for_refresh(feed: Feed, now: datetime) -> bool:
     return elapsed_minutes >= feed.refresh_interval_minutes
 
 
+def _in_quiet_hours(feed: Feed, now: datetime) -> bool:
+    """True if `now`, converted to the feed owner's local timezone, falls inside
+    the feed's quiet-hours window. Wraps midnight when start > end. Only gates
+    "new_article" webhook delivery — SSE live-notification and alert matching
+    are separate event-bus consumers and unaffected, same scope as webhook_eligible.
+    """
+    if feed.quiet_hours_start is None or feed.quiet_hours_end is None:
+        return False
+    start, end = feed.quiet_hours_start, feed.quiet_hours_end
+    if start == end:
+        return False
+    try:
+        tz = ZoneInfo(feed.user.timezone)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    local_hour = now.astimezone(tz).hour
+    if start < end:
+        return start <= local_hour < end
+    return local_hour >= start or local_hour < end
+
+
 @celery_app.task(name="app.tasks.refresh_all_feeds")
 def refresh_all_feeds() -> None:
     """Refresh every active, due feed (except manual-only ones), grouped by URL so shared feeds are fetched once."""
@@ -382,7 +404,7 @@ def refresh_all_feeds() -> None:
                             "user_id": feed.user_id,
                             "feed_id": feed.id,
                             "count":   new_count,
-                            "webhook_eligible": feed.webhook_eligible,
+                            "webhook_eligible": feed.webhook_eligible and not _in_quiet_hours(feed, datetime.now(timezone.utc)),
                         })
                 db.commit()
             except Exception as exc:
@@ -532,7 +554,7 @@ def refresh_feed_by_id(feed_id: int) -> int:
                     "user_id": feed.user_id,
                     "feed_id": feed.id,
                     "count":   new_count,
-                    "webhook_eligible": feed.webhook_eligible,
+                    "webhook_eligible": feed.webhook_eligible and not _in_quiet_hours(feed, datetime.now(timezone.utc)),
                 })
                 db.commit()
             return new_count

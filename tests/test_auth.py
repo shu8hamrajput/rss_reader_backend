@@ -34,6 +34,27 @@ def test_get_me_returns_user(client, user, auth_headers):
     assert body["email"] == user.email
 
 
+def test_update_my_timezone(client, user, auth_headers):
+    assert user.timezone == "UTC"
+
+    resp = client.patch(
+        "/api/v1/auth/me/timezone",
+        json={"timezone": "America/New_York"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "America/New_York"
+
+
+def test_update_my_timezone_rejects_invalid(client, auth_headers):
+    resp = client.patch(
+        "/api/v1/auth/me/timezone",
+        json={"timezone": "Not/A_Real_Zone"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
 def test_patch_preferences_shallow_merge(client, auth_headers):
     resp = client.patch(
         "/api/v1/auth/me/preferences",
